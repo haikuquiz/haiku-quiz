@@ -3,7 +3,7 @@ import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB7pNNbwdvRJ1zuRkdqi7nBFsb43-fP49g",
+  apiKey: "AIzaSyB7pNObwdvRJ1zuRkdqi7nBFsb43-fP49g",
   authDomain: "haiku-quiz.firebaseapp.com",
   projectId: "haiku-quiz",
   storageBucket: "haiku-quiz.firebasestorage.app",
