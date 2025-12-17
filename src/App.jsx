@@ -411,7 +411,7 @@ const App = () => {
     if (!user || userAnswers[riddleId]) return;
 
     const answerData = {
-      oderId: user.uid,
+      userId: user.uid,
       riddleId: riddleId,
       answer: answer,
       time: serverTimestamp(),
