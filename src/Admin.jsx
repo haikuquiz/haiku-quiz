@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Plus, Trash2, LogOut, Bold, Italic, AlignCenter, AlignLeft, List, Eye, Check, Loader2, ArrowLeft, Clock, Award, Users, Lock } from 'lucide-react';
+import { Settings, Plus, Trash2, LogOut, Bold, Italic, AlignCenter, AlignLeft, List, Eye, Check, Loader2, ArrowLeft, Clock, Award, Lock, Trophy } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -17,6 +17,7 @@ const compareAnswers = (a, b) => a?.trim() === b?.trim();
 const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
   const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
   const userMap = Object.fromEntries(users.map(u => [u.id, u.username]));
+  const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
 
   return (
     <div className="bg-white rounded-lg shadow-xl p-6">
@@ -27,21 +28,22 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
       <div className="mb-4 p-3 bg-purple-50 rounded-lg">
         <div className="text-sm mb-2" dangerouslySetInnerHTML={{ __html: riddle.domanda }} />
         <p className="text-sm font-semibold text-purple-700">Risposta: <code className="bg-purple-100 px-2 py-1 rounded">{riddle.risposta}</code></p>
+        <p className="text-xs text-gray-500 mt-1">Punteggi: 🥇 {punti.primo} | 🥈 {punti.secondo} | 🥉 {punti.terzo} | Altri: {punti.altri}</p>
       </div>
       <h4 className="font-semibold mb-3"><Clock size={18} className="inline" /> Risposte ({sorted.length})</h4>
       {sorted.length === 0 ? <p className="text-gray-500 text-center py-8">Nessuna risposta</p> : (
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {sorted.map((ans, i) => {
             const correct = compareAnswers(ans.answer, riddle.risposta);
-            const first = i === 0 && correct && ans.points === 3;
+            const medal = ans.points === punti.primo ? '🥇' : ans.points === punti.secondo && punti.secondo !== punti.altri ? '🥈' : ans.points === punti.terzo && punti.terzo !== punti.altri ? '🥉' : null;
             return (
               <div key={ans.id} className="p-3 rounded-lg border bg-white">
                 <div className="flex justify-between">
                   <div className="flex items-center gap-3">
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${first ? 'bg-yellow-400' : correct ? 'bg-green-100' : 'bg-gray-100'}`}>{i + 1}</span>
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${correct ? 'bg-green-100' : 'bg-gray-100'}`}>{i + 1}</span>
                     <div>
                       <span className="font-semibold">{userMap[ans.userId] || 'Utente'}</span>
-                      {first && <span className="ml-2 text-xs bg-yellow-400 px-2 py-0.5 rounded-full"><Award size={12} className="inline" /> PRIMO!</span>}
+                      {medal && <span className="ml-2 text-lg">{medal}</span>}
                       <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
                     </div>
                   </div>
@@ -68,7 +70,13 @@ const Admin = () => {
   const [riddles, setRiddles] = useState([]);
   const [users, setUsers] = useState([]);
   const [showUsers, setShowUsers] = useState(false);
-  const [newRiddle, setNewRiddle] = useState({ titolo: '', risposta: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00' });
+  const [newRiddle, setNewRiddle] = useState({ 
+    titolo: '', risposta: '', 
+    dataInizio: '', oraInizio: '09:00', 
+    dataFine: '', oraFine: '18:00',
+    puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1
+  });
+  const [showPuntiCustom, setShowPuntiCustom] = useState(false);
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -115,10 +123,27 @@ const Admin = () => {
     const start = new Date(`${newRiddle.dataInizio}T${newRiddle.oraInizio}:00`);
     const end = new Date(`${newRiddle.dataFine}T${newRiddle.oraFine}:00`);
     if (end <= start) { showMsg('Data fine deve essere dopo data inizio'); return; }
+    
     setSubmitting(true);
     try {
-      await setDoc(doc(collection(db, 'riddles')), { titolo: newRiddle.titolo, domanda, risposta: newRiddle.risposta.trim(), dataInizio: Timestamp.fromDate(start), dataFine: Timestamp.fromDate(end), pointsAssigned: false, firstSolver: null, createdAt: serverTimestamp() });
-      setNewRiddle({ titolo: '', risposta: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00' });
+      await setDoc(doc(collection(db, 'riddles')), { 
+        titolo: newRiddle.titolo, 
+        domanda, 
+        risposta: newRiddle.risposta.trim(), 
+        dataInizio: Timestamp.fromDate(start), 
+        dataFine: Timestamp.fromDate(end), 
+        punti: {
+          primo: parseInt(newRiddle.puntoPrimo) || 3,
+          secondo: parseInt(newRiddle.puntoSecondo) || 1,
+          terzo: parseInt(newRiddle.puntoTerzo) || 1,
+          altri: parseInt(newRiddle.puntoAltri) || 1
+        },
+        pointsAssigned: false, 
+        firstSolver: null, 
+        createdAt: serverTimestamp() 
+      });
+      setNewRiddle({ titolo: '', risposta: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00', puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1 });
+      setShowPuntiCustom(false);
       if (editorRef.current) editorRef.current.innerHTML = '';
       showMsg('✅ Indovinello creato!');
     } catch (e) { showMsg('Errore: ' + e.message); }
@@ -224,6 +249,7 @@ const Admin = () => {
               <div ref={editorRef} contentEditable className="w-full min-h-24 px-4 py-2 border rounded-lg bg-white" style={{ whiteSpace: 'pre-wrap' }} />
             </div>
             <input type="text" placeholder="Risposta (CASE-SENSITIVE)" value={newRiddle.risposta} onChange={e => setNewRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-2 border rounded-lg mb-3" />
+            
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div><label className="text-sm text-gray-600">Data inizio</label><input type="date" value={newRiddle.dataInizio} onChange={e => setNewRiddle(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-2 border rounded-lg" /></div>
               <div><label className="text-sm text-gray-600">Ora inizio</label><input type="time" value={newRiddle.oraInizio} onChange={e => setNewRiddle(p => ({ ...p, oraInizio: e.target.value }))} className="w-full px-4 py-2 border rounded-lg" /></div>
@@ -232,6 +258,44 @@ const Admin = () => {
               <div><label className="text-sm text-gray-600">Data fine</label><input type="date" value={newRiddle.dataFine} onChange={e => setNewRiddle(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-2 border rounded-lg" /></div>
               <div><label className="text-sm text-gray-600">Ora fine</label><input type="time" value={newRiddle.oraFine} onChange={e => setNewRiddle(p => ({ ...p, oraFine: e.target.value }))} className="w-full px-4 py-2 border rounded-lg" /></div>
             </div>
+
+            {/* Sezione Punteggi */}
+            <div className="mb-3">
+              <button 
+                type="button"
+                onClick={() => setShowPuntiCustom(!showPuntiCustom)} 
+                className="text-sm text-purple-600 hover:text-purple-800 flex items-center gap-1"
+              >
+                <Trophy size={16} />
+                {showPuntiCustom ? 'Nascondi punteggi personalizzati' : 'Personalizza punteggi'} 
+                <span className="text-gray-400">(default: 🥇3, 🥈1, 🥉1, altri 1)</span>
+              </button>
+              
+              {showPuntiCustom && (
+                <div className="mt-3 p-3 bg-purple-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-2">Punti per posizione (solo risposte corrette):</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-xs text-gray-500">🥇 Primo</label>
+                      <input type="number" min="0" value={newRiddle.puntoPrimo} onChange={e => setNewRiddle(p => ({ ...p, puntoPrimo: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-center" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500">🥈 Secondo</label>
+                      <input type="number" min="0" value={newRiddle.puntoSecondo} onChange={e => setNewRiddle(p => ({ ...p, puntoSecondo: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-center" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500">🥉 Terzo</label>
+                      <input type="number" min="0" value={newRiddle.puntoTerzo} onChange={e => setNewRiddle(p => ({ ...p, puntoTerzo: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-center" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500">Altri</label>
+                      <input type="number" min="0" value={newRiddle.puntoAltri} onChange={e => setNewRiddle(p => ({ ...p, puntoAltri: e.target.value }))} className="w-full px-3 py-2 border rounded-lg text-center" />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button onClick={handleAddRiddle} disabled={submitting} className="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400 flex items-center justify-center gap-2">
               {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Crea Indovinello'}
             </button>
@@ -243,6 +307,7 @@ const Admin = () => {
               {riddles.map(r => {
                 const end = r.dataFine?.toDate?.() || new Date(r.dataFine);
                 const past = now > end;
+                const punti = r.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
                 return (
                   <div key={r.id} className="p-3 bg-white rounded border">
                     <div className="flex justify-between">
@@ -252,6 +317,7 @@ const Admin = () => {
                           <button onClick={() => viewAnswers(r)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /> Risposte</button>
                         </div>
                         <p className="text-xs text-gray-500">Risposta: <code className="bg-gray-100 px-1">{r.risposta}</code></p>
+                        <p className="text-xs text-gray-400">Punti: 🥇{punti.primo} 🥈{punti.secondo} 🥉{punti.terzo} altri:{punti.altri}</p>
                         {r.pointsAssigned ? <p className="text-xs text-green-600 mt-1"><Check size={14} className="inline" /> Punti assegnati</p> : past ? <p className="text-xs text-blue-600 mt-1">⏳ Scaduto - punti in elaborazione</p> : <p className="text-xs text-yellow-600 mt-1">⏳ In corso</p>}
                       </div>
                       <button onClick={() => setConfirmDelete({ type: 'riddle', id: r.id, name: r.titolo })} className="text-red-500 p-1"><Trash2 size={18} /></button>
