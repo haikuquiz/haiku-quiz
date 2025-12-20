@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Trophy, Star, Calendar, Users, LogOut, Mail, Lock, User, Eye, EyeOff, RefreshCw, Check, X, Loader2, Clock, Award, ArrowLeft, ChevronRight } from 'lucide-react';
+import { Trophy, Star, Calendar, Users, LogOut, Mail, Lock, User, Eye, EyeOff, Check, X, Loader2, Clock, Award, ArrowLeft, ChevronRight } from 'lucide-react';
 import { db, auth } from './firebase';
 import { 
   collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, Timestamp
@@ -27,6 +27,57 @@ const formatDateTime = (timestamp) => {
 const compareAnswers = (userAnswer, correctAnswer) => {
   if (!userAnswer || !correctAnswer) return false;
   return userAnswer.trim() === correctAnswer.trim();
+};
+
+// ============ POINTS ASSIGNMENT FUNCTION ============
+const assignPointsForRiddle = async (riddleId, riddle) => {
+  if (riddle.pointsAssigned) return false;
+
+  const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
+  const answers = [];
+  answersSnap.forEach(doc => answers.push({ id: doc.id, ref: doc.ref, ...doc.data() }));
+  
+  // Sort by time
+  answers.sort((a, b) => {
+    const timeA = a.time?.toDate ? a.time.toDate() : new Date(a.time || 0);
+    const timeB = b.time?.toDate ? b.time.toDate() : new Date(b.time || 0);
+    return timeA - timeB;
+  });
+
+  let firstSolver = null;
+  
+  for (const answer of answers) {
+    const isCorrect = compareAnswers(answer.answer, riddle.risposta);
+    let points = 0;
+    
+    if (isCorrect) {
+      if (!firstSolver) {
+        points = 3;
+        firstSolver = answer.userId;
+      } else {
+        points = 1;
+      }
+      
+      // Update user points
+      const userRef = doc(db, 'users', answer.userId);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await updateDoc(userRef, { points: (userDoc.data().points || 0) + points });
+      }
+    }
+    
+    // Update answer with points and isCorrect
+    await updateDoc(answer.ref, { points, isCorrect });
+  }
+  
+  // Mark riddle as processed
+  await updateDoc(doc(db, 'riddles', riddleId), { 
+    pointsAssigned: true, 
+    firstSolver,
+    processedAt: serverTimestamp()
+  });
+  
+  return true;
 };
 
 // ============ COMPONENTS ============
@@ -156,8 +207,8 @@ const RiddleCard = React.memo(({ riddle, onSubmit, hasAnswered, userAnswer, onVi
 
 const RiddleAnswersView = React.memo(({ riddle, answers, users, currentUserId, onBack }) => {
   const sortedAnswers = [...answers].sort((a, b) => {
-    const timeA = a.time?.toDate ? a.time.toDate() : new Date(a.time);
-    const timeB = b.time?.toDate ? b.time.toDate() : new Date(b.time);
+    const timeA = a.time?.toDate ? a.time.toDate() : new Date(a.time || 0);
+    const timeB = b.time?.toDate ? b.time.toDate() : new Date(b.time || 0);
     return timeA - timeB;
   });
   
@@ -289,16 +340,16 @@ const App = () => {
     return () => unsubscribe();
   }, []);
 
-  // Load riddles
+  // Load riddles and check for expired ones
   useEffect(() => {
     const q = query(collection(db, 'riddles'), orderBy('dataInizio', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
       const now = new Date();
       const riddles = [];
       const active = [];
       
-      snapshot.forEach((doc) => {
-        const data = { id: doc.id, ...doc.data() };
+      for (const docSnap of snapshot.docs) {
+        const data = { id: docSnap.id, ...docSnap.data() };
         const start = data.dataInizio?.toDate ? data.dataInizio.toDate() : new Date(data.dataInizio);
         const end = data.dataFine?.toDate ? data.dataFine.toDate() : new Date(data.dataFine);
         
@@ -308,10 +359,20 @@ const App = () => {
           active.push(data);
         } else if (now > end) {
           status = 'past';
+          
+          // Auto-assign points for expired riddles
+          if (!data.pointsAssigned) {
+            try {
+              await assignPointsForRiddle(docSnap.id, data);
+              data.pointsAssigned = true;
+            } catch (e) {
+              console.error('Error assigning points:', e);
+            }
+          }
         }
         
         riddles.push({ ...data, status });
-      });
+      }
       
       setActiveRiddles(active);
       setAllRiddlesView(riddles);
@@ -350,6 +411,31 @@ const App = () => {
     });
     return () => unsubscribe();
   }, [user]);
+
+  // Periodic check for expired riddles (every 30 seconds)
+  useEffect(() => {
+    const checkExpiredRiddles = async () => {
+      const now = new Date();
+      const q = query(collection(db, 'riddles'), where('pointsAssigned', '==', false));
+      const snapshot = await getDocs(q);
+      
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data();
+        const end = data.dataFine?.toDate ? data.dataFine.toDate() : new Date(data.dataFine);
+        
+        if (now > end) {
+          try {
+            await assignPointsForRiddle(docSnap.id, data);
+          } catch (e) {
+            console.error('Error in periodic check:', e);
+          }
+        }
+      }
+    };
+
+    const interval = setInterval(checkExpiredRiddles, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleRegister = async () => {
     if (authLoading) return;
