@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Trophy, Star, Calendar, Users, LogOut, Mail, Lock, User, Eye, Check, Loader2, Clock, Award, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, MessageCircle } from 'lucide-react';
+import { Trophy, Star, Calendar, Users, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -13,7 +13,7 @@ const formatDateTime = (timestamp) => {
 const formatDate = (timestamp) => {
   if (!timestamp) return '-';
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-  return date.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('it-IT');
 };
 
 const compareAnswers = (a, b) => a?.trim() === b?.trim();
@@ -32,14 +32,12 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
   const answers = [];
   answersSnap.forEach(doc => answers.push({ id: doc.id, ref: doc.ref, ...doc.data() }));
   answers.sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
-  let firstSolver = null;
   let correctPosition = 0;
   for (const answer of answers) {
     const isCorrect = compareAnswers(answer.answer, riddle.risposta);
     let points = 0;
     if (isCorrect) {
       points = getPointsForPosition(correctPosition, riddle);
-      if (correctPosition === 0) firstSolver = answer.userId;
       correctPosition++;
       if (riddle.competitionId) {
         const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${answer.userId}`);
@@ -51,11 +49,10 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
     }
     await updateDoc(answer.ref, { points, isCorrect });
   }
-  await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, firstSolver, processedAt: serverTimestamp() });
+  await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp() });
   return true;
 };
 
-// ============ BOTTOM NAV ============
 const BottomNav = ({ activeTab, setActiveTab, hasNotifications }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 z-50">
     <div className="max-w-lg mx-auto flex justify-around">
@@ -65,7 +62,7 @@ const BottomNav = ({ activeTab, setActiveTab, hasNotifications }) => (
         { id: 'leaderboard', icon: Trophy, label: 'Classifica' },
         { id: 'notifications', icon: Bell, label: 'Avvisi', badge: hasNotifications },
       ].map(tab => (
-        <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center px-3 py-1 rounded-lg transition-colors relative ${activeTab === tab.id ? 'text-purple-600' : 'text-gray-500'}`}>
+        <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center px-3 py-1 rounded-lg relative ${activeTab === tab.id ? 'text-purple-600' : 'text-gray-500'}`}>
           <tab.icon size={24} />
           <span className="text-xs mt-1">{tab.label}</span>
           {tab.badge && <span className="absolute top-0 right-1 w-2 h-2 bg-red-500 rounded-full" />}
@@ -75,45 +72,28 @@ const BottomNav = ({ activeTab, setActiveTab, hasNotifications }) => (
   </div>
 );
 
-// ============ ANNOUNCEMENT POPUP ============
 const AnnouncementPopup = ({ announcement, onClose, onMarkRead }) => {
   if (!announcement) return null;
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl max-w-md w-full p-6 relative animate-in fade-in zoom-in">
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={24} /></button>
+      <div className="bg-white rounded-2xl max-w-md w-full p-6 relative">
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400"><X size={24} /></button>
         <div className="flex items-center gap-3 mb-4">
           <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
             <Megaphone className="text-purple-600" size={24} />
           </div>
           <div>
-            <h3 className="font-bold text-lg text-gray-800">{announcement.titolo}</h3>
+            <h3 className="font-bold text-lg">{announcement.titolo}</h3>
             <p className="text-sm text-gray-500">{formatDate(announcement.createdAt)}</p>
           </div>
         </div>
-        <div className="text-gray-700 mb-6 whitespace-pre-wrap">{announcement.messaggio}</div>
-        <button onClick={() => { onMarkRead(announcement.id); onClose(); }} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold hover:bg-purple-700">
-          Ho capito
-        </button>
+        <p className="text-gray-700 mb-6 whitespace-pre-wrap">{announcement.messaggio}</p>
+        <button onClick={() => { onMarkRead(announcement.id); onClose(); }} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold">Ho capito</button>
       </div>
     </div>
   );
 };
 
-// ============ NOTIFICATION BADGE ============
-const NotificationBadge = ({ type, message, onDismiss }) => (
-  <div className={`mb-4 p-4 rounded-xl flex items-start gap-3 ${type === 'new_riddle' ? 'bg-green-50 border border-green-200' : type === 'results' ? 'bg-blue-50 border border-blue-200' : 'bg-purple-50 border border-purple-200'}`}>
-    <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${type === 'new_riddle' ? 'bg-green-100' : type === 'results' ? 'bg-blue-100' : 'bg-purple-100'}`}>
-      {type === 'new_riddle' ? <Star className="text-green-600" size={20} /> : type === 'results' ? <Award className="text-blue-600" size={20} /> : <Bell className="text-purple-600" size={20} />}
-    </div>
-    <div className="flex-1">
-      <p className={`font-medium ${type === 'new_riddle' ? 'text-green-800' : type === 'results' ? 'text-blue-800' : 'text-purple-800'}`}>{message}</p>
-    </div>
-    {onDismiss && <button onClick={onDismiss} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>}
-  </div>
-);
-
-// ============ COMPETITION CARD ============
 const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank }) => {
   const now = new Date();
   const start = competition.dataInizio?.toDate?.() || new Date(competition.dataInizio);
@@ -122,7 +102,7 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
   const isPast = now > end;
 
   return (
-    <div className={`bg-white rounded-2xl p-5 border-2 ${isJoined ? 'border-purple-400 shadow-md' : 'border-gray-100'} transition-all`}>
+    <div className={`bg-white rounded-2xl p-5 border-2 ${isJoined ? 'border-purple-400' : 'border-gray-100'}`}>
       <div className="flex justify-between items-start mb-3">
         <div className="flex items-center gap-2">
           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isActive ? 'bg-green-100' : isPast ? 'bg-gray-100' : 'bg-blue-100'}`}>
@@ -134,37 +114,27 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
           </div>
         </div>
         <span className={`text-xs px-3 py-1 rounded-full font-medium ${isActive ? 'bg-green-100 text-green-700' : isPast ? 'bg-gray-100 text-gray-600' : 'bg-blue-100 text-blue-700'}`}>
-          {isActive ? '● Live' : isPast ? 'Conclusa' : 'Presto'}
+          {isActive ? 'Live' : isPast ? 'Finita' : 'Presto'}
         </span>
       </div>
-      
       {competition.descrizione && <p className="text-sm text-gray-600 mb-3">{competition.descrizione}</p>}
-      <p className="text-xs text-gray-400 mb-3">📅 {formatDate(competition.dataInizio)} → {formatDate(competition.dataFine)}</p>
-
+      <p className="text-xs text-gray-400 mb-3">{formatDate(competition.dataInizio)} - {formatDate(competition.dataFine)}</p>
       {isJoined && (
-        <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-3 mb-3">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Crown size={18} className="text-yellow-500" />
-              <span className="font-bold text-purple-700">{userScore || 0} pt</span>
-            </div>
-            <span className="text-sm text-gray-600">Posizione #{userRank || '-'}</span>
-          </div>
+        <div className="bg-purple-50 rounded-xl p-3 mb-3 flex justify-between items-center">
+          <span className="flex items-center gap-1"><Crown size={16} className="text-yellow-500" /> {userScore || 0} pt</span>
+          <span className="text-sm text-gray-600">#{userRank || '-'}</span>
         </div>
       )}
-
-      <button onClick={() => isJoined || isPast ? onSelect(competition) : onJoin(competition.id)} className={`w-full py-3 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 ${isJoined ? 'bg-purple-600 text-white hover:bg-purple-700' : isPast ? 'bg-gray-100 text-gray-600' : 'bg-gradient-to-r from-purple-500 to-blue-500 text-white hover:opacity-90'}`}>
-        {isJoined ? <><ChevronRight size={18} /> Entra</> : isPast ? <><Eye size={18} /> Visualizza</> : <><UserPlus size={18} /> Partecipa</>}
+      <button onClick={() => isJoined || isPast ? onSelect(competition) : onJoin(competition.id)} className={`w-full py-3 rounded-xl font-semibold flex items-center justify-center gap-2 ${isJoined ? 'bg-purple-600 text-white' : isPast ? 'bg-gray-100 text-gray-600' : 'bg-purple-500 text-white'}`}>
+        {isJoined ? <><ChevronRight size={18} /> Entra</> : isPast ? 'Visualizza' : <><UserPlus size={18} /> Partecipa</>}
       </button>
     </div>
   );
 };
 
-// ============ RIDDLE CARD ============
 const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, showViewButton }) => {
   const [answer, setAnswer] = useState('');
   const [localSubmitting, setLocalSubmitting] = useState(false);
-  
   const now = new Date();
   const startDateTime = riddle.dataInizio?.toDate?.() || new Date(riddle.dataInizio);
   const endDate = riddle.dataFine?.toDate?.() || new Date(riddle.dataFine);
@@ -176,48 +146,45 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
     if (!answer.trim() || localSubmitting) return;
     setLocalSubmitting(true);
     try { await onSubmit(riddle.id, answer.trim()); setAnswer(''); }
-    catch (e) { console.error(e); }
     finally { setLocalSubmitting(false); }
   };
 
   return (
-    <div className={`rounded-2xl p-5 ${isExpired ? 'bg-gray-50' : 'bg-gradient-to-br from-purple-50 to-blue-50'}`}>
+    <div className={`rounded-2xl p-5 ${isExpired ? 'bg-gray-50' : 'bg-purple-50'}`}>
       <div className="flex justify-between items-start mb-3">
         <h3 className="text-lg font-bold text-gray-800">{riddle.titolo}</h3>
         {showViewButton && <button onClick={() => onViewAnswers(riddle)} className="text-sm text-purple-600 font-medium flex items-center gap-1">Risultati <ChevronRight size={16} /></button>}
       </div>
-      
       {!isPublished ? (
-        <p className="text-gray-500 italic">🔒 Disponibile dal {formatDate(riddle.dataInizio)}</p>
+        <p className="text-gray-500">Disponibile dal {formatDate(riddle.dataInizio)}</p>
       ) : (
         <>
           <div className="text-gray-700 mb-4" dangerouslySetInnerHTML={{ __html: riddle.domanda }} />
           <div className="flex flex-wrap gap-2 mb-3">
-            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">🥇 {punti.primo}pt</span>
-            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full">🥈 {punti.secondo}pt</span>
-            <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">🥉 {punti.terzo}pt</span>
+            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
+            <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
+            <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
             <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
           </div>
-          
           {isExpired ? (
             <div className="bg-white rounded-xl p-4 border">
-              <p className="text-sm text-gray-600">✅ Risposta corretta: <strong className="text-purple-700">{riddle.risposta}</strong></p>
-              {hasAnswered && <p className="text-sm mt-2">La tua risposta: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}</p>}
+              <p className="text-sm text-gray-600">Risposta: <strong className="text-purple-700">{riddle.risposta}</strong></p>
+              {hasAnswered && <p className="text-sm mt-2">Tua: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}</p>}
             </div>
           ) : !hasAnswered ? (
             <>
-              <p className="text-xs text-gray-500 mb-2">⏰ Scade: {formatDateTime(riddle.dataFine)}</p>
-              <p className="text-xs text-red-500 mb-3 font-medium">⚠️ Hai un solo tentativo! Case-sensitive.</p>
+              <p className="text-xs text-gray-500 mb-2">Scade: {formatDateTime(riddle.dataFine)}</p>
+              <p className="text-xs text-red-500 mb-3 font-medium">⚠️ Un solo tentativo!</p>
               <div className="flex gap-2">
-                <input type="text" placeholder="La tua risposta..." value={answer} onChange={e => setAnswer(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSubmit()} className="flex-1 px-4 py-3 border-2 border-purple-200 rounded-xl focus:outline-none focus:border-purple-500" />
-                <button onClick={handleSubmit} disabled={localSubmitting || !answer.trim()} className="px-6 py-3 bg-green-500 text-white rounded-xl font-semibold hover:bg-green-600 disabled:bg-gray-300 flex items-center gap-2">
+                <input type="text" placeholder="Risposta..." value={answer} onChange={e => setAnswer(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSubmit()} className="flex-1 px-4 py-3 border-2 border-purple-200 rounded-xl" />
+                <button onClick={handleSubmit} disabled={localSubmitting || !answer.trim()} className="px-6 py-3 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300 flex items-center gap-2">
                   {localSubmitting ? <Loader2 size={18} className="animate-spin" /> : 'Invia'}
                 </button>
               </div>
             </>
           ) : (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <p className="text-green-700 font-medium flex items-center gap-2"><Check size={18} /> Risposta inviata: "{userAnswer}"</p>
+              <p className="text-green-700 font-medium flex items-center gap-2"><Check size={18} /> Inviata: "{userAnswer}"</p>
             </div>
           )}
         </>
@@ -226,19 +193,16 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
   );
 };
 
-// ============ LEADERBOARD ============
 const CompetitionLeaderboard = ({ scores, currentUserId }) => {
-  if (scores.length === 0) return <p className="text-gray-500 text-center py-8">Nessun partecipante ancora.</p>;
+  if (scores.length === 0) return <p className="text-gray-500 text-center py-8">Nessun partecipante</p>;
   const sorted = [...scores].sort((a, b) => (b.points || 0) - (a.points || 0));
   return (
     <div className="space-y-2">
       {sorted.map((score, index) => (
-        <div key={score.oderId} className={`flex items-center justify-between p-4 rounded-xl ${index === 0 ? 'bg-gradient-to-r from-yellow-100 to-yellow-50 border border-yellow-300' : index === 1 ? 'bg-gray-100' : index === 2 ? 'bg-orange-50' : 'bg-white border'}`}>
+        <div key={score.oderId} className={`flex items-center justify-between p-4 rounded-xl ${index === 0 ? 'bg-yellow-100 border border-yellow-300' : index === 1 ? 'bg-gray-100' : index === 2 ? 'bg-orange-50' : 'bg-white border'}`}>
           <div className="flex items-center gap-3">
-            <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${index === 0 ? 'bg-yellow-400 text-yellow-900' : index === 1 ? 'bg-gray-400 text-white' : index === 2 ? 'bg-orange-400 text-white' : 'bg-gray-200'}`}>{index + 1}</span>
-            <span className={`font-medium ${score.oderId === currentUserId ? 'text-purple-700' : 'text-gray-800'}`}>
-              {score.username || 'Utente'} {score.oderId === currentUserId && <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full ml-1">Tu</span>}
-            </span>
+            <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${index === 0 ? 'bg-yellow-400' : index === 1 ? 'bg-gray-400 text-white' : index === 2 ? 'bg-orange-400 text-white' : 'bg-gray-200'}`}>{index + 1}</span>
+            <span className={score.oderId === currentUserId ? 'text-purple-700 font-semibold' : ''}>{score.username || 'Utente'} {score.oderId === currentUserId && '(Tu)'}</span>
           </div>
           <span className="font-bold text-purple-700">{score.points || 0} pt</span>
         </div>
@@ -247,11 +211,9 @@ const CompetitionLeaderboard = ({ scores, currentUserId }) => {
   );
 };
 
-// ============ RIDDLE ANSWERS VIEW ============
 const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) => {
   const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
   const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
-
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6">
       <div className="flex items-center gap-3 mb-4">
@@ -259,7 +221,7 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
         <h3 className="text-xl font-bold text-purple-700">{riddle.titolo}</h3>
       </div>
       <div className="mb-4 p-4 bg-purple-50 rounded-xl">
-        <p className="text-sm font-semibold text-purple-700">Risposta: <code className="bg-purple-100 px-2 py-1 rounded">{riddle.risposta}</code></p>
+        <p className="text-sm font-semibold text-purple-700">Risposta: {riddle.risposta}</p>
       </div>
       {sorted.length === 0 ? <p className="text-gray-500 text-center py-8">Nessuna risposta</p> : (
         <div className="space-y-2 max-h-80 overflow-y-auto">
@@ -287,7 +249,6 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
   );
 };
 
-// ============ MAIN APP ============
 const App = () => {
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
@@ -298,28 +259,21 @@ const App = () => {
   const [isLoginMode, setIsLoginMode] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [message, setMessage] = useState('');
-  
   const [activeTab, setActiveTab] = useState('home');
   const [competitions, setCompetitions] = useState([]);
   const [userCompetitions, setUserCompetitions] = useState([]);
   const [selectedCompetition, setSelectedCompetition] = useState(null);
   const [competitionScores, setCompetitionScores] = useState([]);
-  
   const [riddles, setRiddles] = useState([]);
   const [userAnswers, setUserAnswers] = useState({});
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
-  
   const [announcements, setAnnouncements] = useState([]);
   const [readAnnouncements, setReadAnnouncements] = useState([]);
   const [showPopup, setShowPopup] = useState(null);
 
-  const showMsg = useCallback((msg, dur = 3000) => {
-    setMessage(msg);
-    if (dur > 0) setTimeout(() => setMessage(''), dur);
-  }, []);
+  const showMsg = useCallback((msg, dur = 3000) => { setMessage(msg); if (dur > 0) setTimeout(() => setMessage(''), dur); }, []);
 
-  // Auth
   useEffect(() => {
     return onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -331,20 +285,16 @@ const App = () => {
           setReadAnnouncements(data.readAnnouncements || []);
         }
       } else {
-        setUser(null);
-        setUserData(null);
-        setSelectedCompetition(null);
+        setUser(null); setUserData(null); setSelectedCompetition(null);
       }
       setLoading(false);
     });
   }, []);
 
-  // Load announcements
   useEffect(() => {
     return onSnapshot(query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(50)), (snap) => {
       const anns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setAnnouncements(anns);
-      // Show popup for latest unread
       if (user && anns.length > 0) {
         const unread = anns.find(a => !readAnnouncements.includes(a.id));
         if (unread && !showPopup) setShowPopup(unread);
@@ -352,14 +302,12 @@ const App = () => {
     });
   }, [user, readAnnouncements]);
 
-  // Load competitions
   useEffect(() => {
     return onSnapshot(query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')), (snap) => {
       setCompetitions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
   }, []);
 
-  // Load user competitions
   useEffect(() => {
     if (!user) { setUserCompetitions([]); return; }
     return onSnapshot(query(collection(db, 'competitionScores'), where('oderId', '==', user.uid)), (snap) => {
@@ -367,7 +315,6 @@ const App = () => {
     });
   }, [user]);
 
-  // Load riddles for selected competition
   useEffect(() => {
     if (!selectedCompetition) { setRiddles([]); return; }
     return onSnapshot(query(collection(db, 'riddles'), where('competitionId', '==', selectedCompetition.id), orderBy('dataInizio', 'desc')), async (snap) => {
@@ -385,7 +332,6 @@ const App = () => {
     });
   }, [selectedCompetition]);
 
-  // Load competition scores
   useEffect(() => {
     if (!selectedCompetition) { setCompetitionScores([]); return; }
     return onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', selectedCompetition.id)), (snap) => {
@@ -393,7 +339,6 @@ const App = () => {
     });
   }, [selectedCompetition]);
 
-  // Load user answers
   useEffect(() => {
     if (!user) { setUserAnswers({}); return; }
     return onSnapshot(query(collection(db, 'answers'), where('userId', '==', user.uid)), (snap) => {
@@ -403,7 +348,6 @@ const App = () => {
     });
   }, [user]);
 
-  // Periodic check for expired riddles
   useEffect(() => {
     const check = async () => {
       const snap = await getDocs(query(collection(db, 'riddles'), where('pointsAssigned', '==', false)));
@@ -420,16 +364,16 @@ const App = () => {
 
   const handleRegister = async () => {
     if (authLoading) return;
-    if (username.trim().length < 3) { showMsg('Nickname: minimo 3 caratteri'); return; }
+    if (username.trim().length < 3) { showMsg('Nickname: min 3 caratteri'); return; }
     if (!email.includes('@')) { showMsg('Email non valida'); return; }
-    if (password.length < 6) { showMsg('Password: minimo 6 caratteri'); return; }
+    if (password.length < 6) { showMsg('Password: min 6 caratteri'); return; }
     setAuthLoading(true);
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await setDoc(doc(db, 'users', cred.user.uid), { username: username.trim(), email, readAnnouncements: [], createdAt: serverTimestamp() });
-      showMsg('Registrazione completata!');
+      showMsg('✅ Registrazione completata!');
     } catch (error) {
-      showMsg(error.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore: ' + error.message);
+      showMsg(error.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore');
     } finally { setAuthLoading(false); }
   };
 
@@ -437,16 +381,11 @@ const App = () => {
     if (authLoading) return;
     setAuthLoading(true);
     try { await signInWithEmailAndPassword(auth, email, password); }
-    catch { showMsg('Email o password errati'); }
+    catch { showMsg('Credenziali errate'); }
     finally { setAuthLoading(false); }
   };
 
-  const handleLogout = async () => { 
-    await signOut(auth); 
-    setSelectedCompetition(null);
-    setViewingRiddle(null);
-    setActiveTab('home');
-  };
+  const handleLogout = async () => { await signOut(auth); setSelectedCompetition(null); setViewingRiddle(null); setActiveTab('home'); };
 
   const handleJoinCompetition = async (competitionId) => {
     if (!user) return;
@@ -456,20 +395,17 @@ const App = () => {
       const compRef = doc(db, 'competitions', competitionId);
       const compDoc = await getDoc(compRef);
       if (compDoc.exists()) await updateDoc(compRef, { participantsCount: (compDoc.data().participantsCount || 0) + 1 });
-      showMsg('✅ Iscrizione completata!');
-    } catch (e) { showMsg('Errore: ' + e.message); }
+      showMsg('✅ Iscritto!');
+    } catch (e) { showMsg('Errore'); }
   };
 
   const handleSubmitAnswer = async (riddleId, answer) => {
     if (!user || userAnswers[riddleId]) return;
     const answerData = { userId: user.uid, riddleId, answer, time: serverTimestamp(), points: 0, isCorrect: null };
     setUserAnswers(prev => ({ ...prev, [riddleId]: answerData }));
-    showMsg('✅ Risposta inviata!');
+    showMsg('✅ Inviata!');
     try { await setDoc(doc(collection(db, 'answers')), answerData); }
-    catch (error) {
-      setUserAnswers(prev => { const n = { ...prev }; delete n[riddleId]; return n; });
-      showMsg('Errore nel salvataggio');
-    }
+    catch { setUserAnswers(prev => { const n = { ...prev }; delete n[riddleId]; return n; }); showMsg('Errore'); }
   };
 
   const handleViewAnswers = async (riddle) => {
@@ -487,7 +423,6 @@ const App = () => {
 
   if (loading) return <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center"><Loader2 className="animate-spin text-purple-600" size={40} /></div>;
 
-  // View riddle answers
   if (viewingRiddle) return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 p-4 pb-24">
       <div className="max-w-lg mx-auto">
@@ -496,7 +431,6 @@ const App = () => {
     </div>
   );
 
-  // Selected competition view
   if (selectedCompetition && user) {
     const isJoined = userCompetitions.includes(selectedCompetition.id);
     const now = new Date();
@@ -517,15 +451,12 @@ const App = () => {
             </div>
           </div>
         </div>
-
         <div className="max-w-lg mx-auto px-4">
           {!isJoined ? (
             <div className="text-center py-12 bg-white rounded-2xl">
               <Flag size={48} className="mx-auto text-purple-300 mb-4" />
-              <p className="text-gray-600 mb-4">Non sei iscritto a questa competizione</p>
-              <button onClick={() => handleJoinCompetition(selectedCompetition.id)} className="bg-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:bg-purple-700 inline-flex items-center gap-2">
-                <UserPlus size={20} /> Partecipa ora
-              </button>
+              <p className="text-gray-600 mb-4">Non sei iscritto</p>
+              <button onClick={() => handleJoinCompetition(selectedCompetition.id)} className="bg-purple-600 text-white px-8 py-3 rounded-xl font-semibold inline-flex items-center gap-2"><UserPlus size={20} /> Partecipa</button>
             </div>
           ) : (
             <>
@@ -538,8 +469,7 @@ const App = () => {
               {activeRiddles.length === 0 && (
                 <div className="bg-white rounded-2xl p-8 text-center mb-6">
                   <Clock size={48} className="mx-auto text-gray-300 mb-4" />
-                  <p className="text-gray-600 font-medium">Nessun indovinello attivo</p>
-                  <p className="text-gray-400 text-sm">Torna più tardi!</p>
+                  <p className="text-gray-600">Nessun quiz attivo</p>
                 </div>
               )}
               {pastRiddles.length > 0 && (
@@ -550,13 +480,11 @@ const App = () => {
               )}
             </>
           )}
-          
           <div className="bg-white rounded-2xl p-5 mb-6">
             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Trophy className="text-yellow-500" /> Classifica</h3>
             <CompetitionLeaderboard scores={competitionScores} currentUserId={user?.uid} />
           </div>
         </div>
-
         {message && <div className="fixed bottom-20 left-4 right-4 max-w-lg mx-auto bg-purple-600 text-white p-4 rounded-xl text-center shadow-lg">{message}</div>}
       </div>
     );
@@ -565,12 +493,9 @@ const App = () => {
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
   const joinedComps = competitions.filter(c => userCompetitions.includes(c.id));
 
-  // Main view with bottom nav
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
       <AnnouncementPopup announcement={showPopup} onClose={() => setShowPopup(null)} onMarkRead={handleMarkAnnouncementRead} />
-
-      {/* Header */}
       <div className="bg-white rounded-b-3xl shadow-lg p-6 mb-6">
         <div className="max-w-lg mx-auto">
           {user ? (
@@ -579,7 +504,7 @@ const App = () => {
                 <p className="text-gray-500 text-sm">Ciao 👋</p>
                 <h1 className="text-2xl font-bold text-purple-800">{userData?.username}</h1>
               </div>
-              <button onClick={handleLogout} className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200"><LogOut size={20} className="text-gray-600" /></button>
+              <button onClick={handleLogout} className="p-3 bg-gray-100 rounded-xl"><LogOut size={20} className="text-gray-600" /></button>
             </div>
           ) : (
             <div className="text-center">
@@ -592,7 +517,6 @@ const App = () => {
 
       <div className="max-w-lg mx-auto px-4">
         {!user ? (
-          // Login/Register
           <div className="bg-white rounded-2xl shadow-xl p-6">
             <h2 className="text-xl font-bold text-gray-800 mb-6">{isLoginMode ? 'Accedi' : 'Registrati'}</h2>
             {!isLoginMode && (
@@ -600,7 +524,7 @@ const App = () => {
                 <label className="block text-sm font-medium text-gray-600 mb-2">Nickname</label>
                 <div className="relative">
                   <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input type="text" placeholder="Min. 3 caratteri" value={username} onChange={e => setUsername(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500" />
+                  <input type="text" placeholder="Min. 3 caratteri" value={username} onChange={e => setUsername(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
                 </div>
               </div>
             )}
@@ -608,103 +532,91 @@ const App = () => {
               <label className="block text-sm font-medium text-gray-600 mb-2">Email</label>
               <div className="relative">
                 <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="email" placeholder="tua@email.com" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500" />
+                <input type="email" placeholder="email@esempio.com" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
               </div>
             </div>
             <div className="mb-6">
               <label className="block text-sm font-medium text-gray-600 mb-2">Password</label>
               <div className="relative">
                 <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="password" placeholder="Min. 6 caratteri" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && (isLoginMode ? handleLogin() : handleRegister())} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-purple-500" />
+                <input type="password" placeholder="Min. 6 caratteri" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && (isLoginMode ? handleLogin() : handleRegister())} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
               </div>
             </div>
-            <button onClick={isLoginMode ? handleLogin : handleRegister} disabled={authLoading} className="w-full bg-purple-600 text-white py-4 rounded-xl font-semibold hover:bg-purple-700 disabled:bg-gray-400 flex items-center justify-center gap-2 mb-4">
+            <button onClick={isLoginMode ? handleLogin : handleRegister} disabled={authLoading} className="w-full bg-purple-600 text-white py-4 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2 mb-4">
               {authLoading ? <Loader2 size={20} className="animate-spin" /> : (isLoginMode ? 'Accedi' : 'Registrati')}
             </button>
             <button onClick={() => { setIsLoginMode(!isLoginMode); setMessage(''); }} className="w-full text-purple-600 text-sm">
               {isLoginMode ? 'Non hai un account? Registrati' : 'Hai già un account? Accedi'}
             </button>
-            {message && <div className={`mt-4 p-3 rounded-xl text-center text-sm ${message.includes('Errore') || message.includes('errat') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{message}</div>}
+            {message && <div className={`mt-4 p-3 rounded-xl text-center text-sm ${message.includes('✅') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{message}</div>}
           </div>
         ) : (
           <>
-            {/* HOME TAB */}
             {activeTab === 'home' && (
               <>
                 {unreadAnnouncements.length > 0 && (
-                  <NotificationBadge type="announcement" message={`Hai ${unreadAnnouncements.length} nuov${unreadAnnouncements.length === 1 ? 'o avviso' : 'i avvisi'}`} />
+                  <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-3">
+                    <Bell className="text-purple-600" size={20} />
+                    <span className="text-purple-700">{unreadAnnouncements.length} nuov{unreadAnnouncements.length === 1 ? 'o avviso' : 'i avvisi'}</span>
+                  </div>
                 )}
-                
                 {joinedComps.length > 0 ? (
                   <div className="mb-6">
-                    <h3 className="font-bold text-gray-800 mb-3">Le tue competizioni</h3>
+                    <h3 className="font-bold text-gray-800 mb-3">Le tue gare</h3>
                     <div className="space-y-4">
                       {joinedComps.map(comp => {
-                        const sortedScores = competitionScores.filter(s => s.competitionId === comp.id).sort((a, b) => (b.points || 0) - (a.points || 0));
-                        const userScoreData = sortedScores.find(s => s.oderId === user.uid);
-                        const userRank = sortedScores.findIndex(s => s.oderId === user.uid) + 1;
-                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={userScoreData?.points} userRank={userRank} />;
+                        const scores = competitionScores.filter(s => s.competitionId === comp.id);
+                        const userScoreData = scores.find(s => s.oderId === user.uid);
+                        const sorted = [...scores].sort((a, b) => (b.points || 0) - (a.points || 0));
+                        const rank = sorted.findIndex(s => s.oderId === user.uid) + 1;
+                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={userScoreData?.points} userRank={rank} />;
                       })}
                     </div>
                   </div>
                 ) : (
                   <div className="bg-white rounded-2xl p-8 text-center mb-6">
                     <Flag size={48} className="mx-auto text-purple-200 mb-4" />
-                    <p className="text-gray-600 font-medium">Non sei iscritto a nessuna competizione</p>
-                    <p className="text-gray-400 text-sm mb-4">Vai alla sezione Gare per partecipare!</p>
-                    <button onClick={() => setActiveTab('competitions')} className="bg-purple-600 text-white px-6 py-3 rounded-xl font-semibold">Scopri le gare</button>
+                    <p className="text-gray-600 font-medium">Non sei iscritto a nessuna gara</p>
+                    <button onClick={() => setActiveTab('competitions')} className="mt-4 bg-purple-600 text-white px-6 py-3 rounded-xl font-semibold">Scopri le gare</button>
                   </div>
                 )}
               </>
             )}
 
-            {/* COMPETITIONS TAB */}
             {activeTab === 'competitions' && (
               <div className="space-y-4">
-                <h3 className="font-bold text-gray-800">Tutte le competizioni</h3>
+                <h3 className="font-bold text-gray-800">Tutte le gare</h3>
                 {competitions.length === 0 ? (
-                  <div className="bg-white rounded-2xl p-8 text-center">
-                    <p className="text-gray-500">Nessuna competizione disponibile</p>
-                  </div>
+                  <div className="bg-white rounded-2xl p-8 text-center"><p className="text-gray-500">Nessuna gara</p></div>
                 ) : (
-                  competitions.map(comp => {
-                    const isJoined = userCompetitions.includes(comp.id);
-                    return <CompetitionCard key={comp.id} competition={comp} isJoined={isJoined} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} />;
-                  })
+                  competitions.map(comp => <CompetitionCard key={comp.id} competition={comp} isJoined={userCompetitions.includes(comp.id)} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} />)
                 )}
               </div>
             )}
 
-            {/* LEADERBOARD TAB */}
             {activeTab === 'leaderboard' && (
               <div className="bg-white rounded-2xl p-5">
-                <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Trophy className="text-yellow-500" /> Classifica globale</h3>
+                <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Trophy className="text-yellow-500" /> Classifiche</h3>
                 {joinedComps.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">Iscriviti a una competizione per vedere la classifica!</p>
+                  <p className="text-gray-500 text-center py-8">Iscriviti a una gara!</p>
                 ) : (
-                  <div className="space-y-4">
-                    {joinedComps.map(comp => {
-                      const scores = competitionScores.filter(s => s.competitionId === comp.id);
-                      return (
-                        <div key={comp.id}>
-                          <h4 className="font-medium text-purple-700 mb-2">{comp.nome}</h4>
-                          <CompetitionLeaderboard scores={scores} currentUserId={user?.uid} />
-                        </div>
-                      );
-                    })}
-                  </div>
+                  joinedComps.map(comp => (
+                    <div key={comp.id} className="mb-6">
+                      <h4 className="font-medium text-purple-700 mb-2">{comp.nome}</h4>
+                      <CompetitionLeaderboard scores={competitionScores.filter(s => s.competitionId === comp.id)} currentUserId={user?.uid} />
+                    </div>
+                  ))
                 )}
               </div>
             )}
 
-            {/* NOTIFICATIONS TAB */}
             {activeTab === 'notifications' && (
               <div className="space-y-4">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Megaphone className="text-purple-600" /> Comunicazioni</h3>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Megaphone className="text-purple-600" /> Avvisi</h3>
                 {announcements.length === 0 ? (
                   <div className="bg-white rounded-2xl p-8 text-center">
                     <Bell size={48} className="mx-auto text-gray-200 mb-4" />
-                    <p className="text-gray-500">Nessuna comunicazione</p>
+                    <p className="text-gray-500">Nessun avviso</p>
                   </div>
                 ) : (
                   announcements.map(ann => (
@@ -732,10 +644,8 @@ const App = () => {
             )}
           </>
         )}
-
         {message && user && <div className="fixed bottom-20 left-4 right-4 max-w-lg mx-auto bg-purple-600 text-white p-4 rounded-xl text-center shadow-lg">{message}</div>}
       </div>
-
       {user && <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} hasNotifications={unreadAnnouncements.length > 0} />}
     </div>
   );
