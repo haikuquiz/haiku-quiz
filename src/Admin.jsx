@@ -1,23 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Plus, Trash2, LogOut, Bold, Italic, AlignCenter, AlignLeft, List, Eye, Check, Loader2, ArrowLeft, Clock, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid } from 'lucide-react';
+import { Settings, Plus, Trash2, LogOut, Bold, Italic, List, Eye, Check, Loader2, ArrowLeft, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid, FileText, Edit3 } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 
 const ADMIN_EMAILS = ['haikuquizofficial@gmail.com'];
 
-const formatDateTime = (timestamp) => {
-  if (!timestamp) return '-';
-  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-  return date.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-};
-
-const formatDate = (timestamp) => {
-  if (!timestamp) return '-';
-  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-  return date.toLocaleDateString('it-IT');
-};
-
+const formatDateTime = (ts) => { if (!ts) return '-'; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+const formatDate = (ts) => { if (!ts) return '-'; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleDateString('it-IT'); };
 const compareAnswers = (a, b) => a?.trim() === b?.trim();
 
 const AdminBottomNav = ({ activeTab, setActiveTab }) => (
@@ -31,11 +21,21 @@ const AdminBottomNav = ({ activeTab, setActiveTab }) => (
         { id: 'users', icon: Users, label: 'Utenti' },
       ].map(tab => (
         <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center px-2 py-1 rounded-lg ${activeTab === tab.id ? 'text-purple-600' : 'text-gray-500'}`}>
-          <tab.icon size={22} />
-          <span className="text-xs mt-1">{tab.label}</span>
+          <tab.icon size={22} /><span className="text-xs mt-1">{tab.label}</span>
         </button>
       ))}
     </div>
+  </div>
+);
+
+const RichTextEditor = ({ editorRef, placeholder }) => (
+  <div className="mb-3">
+    <div className="flex gap-2 mb-2">
+      {[['bold', Bold], ['italic', Italic], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
+        <button key={cmd} type="button" onClick={() => { editorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
+      ))}
+    </div>
+    <div ref={editorRef} contentEditable className="w-full min-h-24 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white focus:outline-none focus:border-purple-500" data-placeholder={placeholder} />
   </div>
 );
 
@@ -43,7 +43,6 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
   const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
   const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
-
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6">
       <div className="flex items-center gap-3 mb-4">
@@ -93,16 +92,19 @@ const Admin = () => {
   const [competitionScores, setCompetitionScores] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCompetition, setSelectedCompetition] = useState(null);
+  const [editingCompetition, setEditingCompetition] = useState(null);
   const [newCompetition, setNewCompetition] = useState({ nome: '', descrizione: '', dataInizio: '', dataFine: '' });
   const [newRiddle, setNewRiddle] = useState({ titolo: '', risposta: '', competitionId: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00', puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1 });
-  const [newAnnouncement, setNewAnnouncement] = useState({ titolo: '', messaggio: '' });
+  const [newAnnouncement, setNewAnnouncement] = useState({ titolo: '' });
   const [showPuntiCustom, setShowPuntiCustom] = useState(false);
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const editorRef = useRef(null);
+  
+  const riddleEditorRef = useRef(null);
   const announcementEditorRef = useRef(null);
+  const regolamentoEditorRef = useRef(null);
 
   const showMsg = (msg, dur = 3000) => { setMessage(msg); if (dur > 0) setTimeout(() => setMessage(''), dur); };
 
@@ -114,72 +116,76 @@ const Admin = () => {
     });
   }, []);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    return onSnapshot(query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')), (snap) => {
-      setCompetitions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    return onSnapshot(query(collection(db, 'riddles'), orderBy('dataInizio', 'desc')), (snap) => {
-      setRiddles(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    return onSnapshot(query(collection(db, 'users'), orderBy('createdAt', 'desc')), (snap) => {
-      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    return onSnapshot(query(collection(db, 'announcements'), orderBy('createdAt', 'desc')), (snap) => {
-      setAnnouncements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin || !selectedCompetition) { setCompetitionScores([]); return; }
-    return onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', selectedCompetition.id)), (snap) => {
-      setCompetitionScores(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-  }, [isAdmin, selectedCompetition]);
+  useEffect(() => { if (!isAdmin) return; return onSnapshot(query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')), (snap) => { setCompetitions(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin]);
+  useEffect(() => { if (!isAdmin) return; return onSnapshot(query(collection(db, 'riddles'), orderBy('dataInizio', 'desc')), (snap) => { setRiddles(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin]);
+  useEffect(() => { if (!isAdmin) return; return onSnapshot(query(collection(db, 'users'), orderBy('createdAt', 'desc')), (snap) => { setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin]);
+  useEffect(() => { if (!isAdmin) return; return onSnapshot(query(collection(db, 'announcements'), orderBy('createdAt', 'desc')), (snap) => { setAnnouncements(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin]);
+  useEffect(() => { if (!isAdmin || !selectedCompetition) { setCompetitionScores([]); return; } return onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', selectedCompetition.id)), (snap) => { setCompetitionScores(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin, selectedCompetition]);
 
   const handleLogin = async () => {
-    if (authLoading) return;
-    setAuthLoading(true);
-    try {
-      const cred = await signInWithEmailAndPassword(auth, email, password);
-      if (!ADMIN_EMAILS.includes(cred.user.email)) { await signOut(auth); showMsg('Accesso non autorizzato'); }
-    } catch { showMsg('Credenziali errate'); }
+    if (authLoading) return; setAuthLoading(true);
+    try { const cred = await signInWithEmailAndPassword(auth, email, password); if (!ADMIN_EMAILS.includes(cred.user.email)) { await signOut(auth); showMsg('Accesso non autorizzato'); } }
+    catch { showMsg('Credenziali errate'); }
     finally { setAuthLoading(false); }
   };
 
   const handleAddCompetition = async () => {
     if (!newCompetition.nome || !newCompetition.dataInizio || !newCompetition.dataFine) { showMsg('Compila tutti i campi'); return; }
+    const regolamento = regolamentoEditorRef.current?.innerHTML || '';
     setSubmitting(true);
     try {
-      await setDoc(doc(collection(db, 'competitions')), { nome: newCompetition.nome, descrizione: newCompetition.descrizione || '', dataInizio: Timestamp.fromDate(new Date(newCompetition.dataInizio)), dataFine: Timestamp.fromDate(new Date(newCompetition.dataFine)), participantsCount: 0, createdAt: serverTimestamp() });
+      await setDoc(doc(collection(db, 'competitions')), { 
+        nome: newCompetition.nome, 
+        descrizione: newCompetition.descrizione || '', 
+        regolamento,
+        dataInizio: Timestamp.fromDate(new Date(newCompetition.dataInizio)), 
+        dataFine: Timestamp.fromDate(new Date(newCompetition.dataFine)), 
+        participantsCount: 0, 
+        createdAt: serverTimestamp() 
+      });
       setNewCompetition({ nome: '', descrizione: '', dataInizio: '', dataFine: '' });
+      if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = '';
       showMsg('✅ Competizione creata!');
     } catch (e) { showMsg('Errore: ' + e.message); }
     finally { setSubmitting(false); }
   };
 
+  const handleUpdateCompetition = async () => {
+    if (!editingCompetition) return;
+    const regolamento = regolamentoEditorRef.current?.innerHTML || '';
+    setSubmitting(true);
+    try {
+      await updateDoc(doc(db, 'competitions', editingCompetition.id), { 
+        nome: editingCompetition.nome,
+        descrizione: editingCompetition.descrizione || '',
+        regolamento
+      });
+      setEditingCompetition(null);
+      showMsg('✅ Competizione aggiornata!');
+    } catch (e) { showMsg('Errore: ' + e.message); }
+    finally { setSubmitting(false); }
+  };
+
   const handleAddRiddle = async () => {
-    const domanda = editorRef.current?.innerHTML || '';
+    const domanda = riddleEditorRef.current?.innerHTML || '';
     if (!newRiddle.titolo || !domanda || !newRiddle.risposta || !newRiddle.competitionId || !newRiddle.dataInizio || !newRiddle.dataFine) { showMsg('Compila tutti i campi'); return; }
     setSubmitting(true);
     try {
       const start = new Date(`${newRiddle.dataInizio}T${newRiddle.oraInizio}:00`);
       const end = new Date(`${newRiddle.dataFine}T${newRiddle.oraFine}:00`);
-      await setDoc(doc(collection(db, 'riddles')), { titolo: newRiddle.titolo, domanda, risposta: newRiddle.risposta.trim(), competitionId: newRiddle.competitionId, dataInizio: Timestamp.fromDate(start), dataFine: Timestamp.fromDate(end), punti: { primo: parseInt(newRiddle.puntoPrimo) || 3, secondo: parseInt(newRiddle.puntoSecondo) || 1, terzo: parseInt(newRiddle.puntoTerzo) || 1, altri: parseInt(newRiddle.puntoAltri) || 1 }, pointsAssigned: false, createdAt: serverTimestamp() });
+      await setDoc(doc(collection(db, 'riddles')), { 
+        titolo: newRiddle.titolo, 
+        domanda, 
+        risposta: newRiddle.risposta.trim(), 
+        competitionId: newRiddle.competitionId, 
+        dataInizio: Timestamp.fromDate(start), 
+        dataFine: Timestamp.fromDate(end), 
+        punti: { primo: parseInt(newRiddle.puntoPrimo) || 3, secondo: parseInt(newRiddle.puntoSecondo) || 1, terzo: parseInt(newRiddle.puntoTerzo) || 1, altri: parseInt(newRiddle.puntoAltri) || 1 }, 
+        pointsAssigned: false, 
+        createdAt: serverTimestamp() 
+      });
       setNewRiddle({ ...newRiddle, titolo: '', risposta: '', dataInizio: '', dataFine: '' });
-      if (editorRef.current) editorRef.current.innerHTML = '';
+      if (riddleEditorRef.current) riddleEditorRef.current.innerHTML = '';
       showMsg('✅ Indovinello creato!');
     } catch (e) { showMsg('Errore: ' + e.message); }
     finally { setSubmitting(false); }
@@ -191,7 +197,7 @@ const Admin = () => {
     setSubmitting(true);
     try {
       await setDoc(doc(collection(db, 'announcements')), { titolo: newAnnouncement.titolo, messaggio, createdAt: serverTimestamp() });
-      setNewAnnouncement({ titolo: '', messaggio: '' });
+      setNewAnnouncement({ titolo: '' });
       if (announcementEditorRef.current) announcementEditorRef.current.innerHTML = '';
       showMsg('✅ Comunicazione inviata!');
     } catch (e) { showMsg('Errore: ' + e.message); }
@@ -246,6 +252,13 @@ const Admin = () => {
     setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   };
 
+  const startEditCompetition = (comp) => {
+    setEditingCompetition({ ...comp });
+    setTimeout(() => {
+      if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = comp.regolamento || '';
+    }, 100);
+  };
+
   if (loading) return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><Loader2 className="animate-spin text-purple-600" size={40} /></div>;
 
   if (!isAdmin) return (
@@ -273,6 +286,28 @@ const Admin = () => {
     </div>
   );
 
+  if (editingCompetition) return (
+    <div className="min-h-screen bg-gray-100 p-4 pb-24">
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <button onClick={() => setEditingCompetition(null)} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button>
+            <h2 className="text-xl font-bold text-gray-800">Modifica Competizione</h2>
+          </div>
+          <input type="text" placeholder="Nome *" value={editingCompetition.nome} onChange={e => setEditingCompetition(p => ({ ...p, nome: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
+          <textarea placeholder="Descrizione breve" value={editingCompetition.descrizione || ''} onChange={e => setEditingCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" />
+          <div className="mb-4">
+            <label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento (opzionale)</label>
+            <RichTextEditor editorRef={regolamentoEditorRef} placeholder="Scrivi il regolamento della competizione..." />
+          </div>
+          <button onClick={handleUpdateCompetition} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">
+            {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Salva modifiche'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (selectedCompetition) {
     const compRiddles = riddles.filter(r => r.competitionId === selectedCompetition.id);
     const sortedScores = [...competitionScores].sort((a, b) => (b.points || 0) - (a.points || 0));
@@ -281,7 +316,11 @@ const Admin = () => {
         <div className="bg-white p-4 shadow-sm mb-4">
           <div className="max-w-4xl mx-auto flex items-center gap-3">
             <button onClick={() => setSelectedCompetition(null)} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button>
-            <h2 className="text-xl font-bold text-purple-700">{selectedCompetition.nome}</h2>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-purple-700">{selectedCompetition.nome}</h2>
+              <p className="text-sm text-gray-500">{formatDate(selectedCompetition.dataInizio)} - {formatDate(selectedCompetition.dataFine)}</p>
+            </div>
+            <button onClick={() => startEditCompetition(selectedCompetition)} className="p-2 hover:bg-gray-100 rounded-xl text-purple-600"><Edit3 size={20} /></button>
           </div>
         </div>
         <div className="max-w-4xl mx-auto px-4 grid md:grid-cols-2 gap-6">
@@ -317,7 +356,7 @@ const Admin = () => {
     );
   }
 
-  const activeComps = competitions.filter(c => { const now = new Date(); const s = c.dataInizio?.toDate?.(); const e = c.dataFine?.toDate?.(); return now >= s && now <= e; });
+  const activeComps = competitions.filter(c => { const now = new Date(), s = c.dataInizio?.toDate?.(), e = c.dataFine?.toDate?.(); return now >= s && now <= e; });
 
   return (
     <div className="min-h-screen bg-gray-100 pb-24">
@@ -373,7 +412,11 @@ const Admin = () => {
             <div className="bg-white rounded-2xl p-5">
               <h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuova Gara</h3>
               <input type="text" placeholder="Nome *" value={newCompetition.nome} onChange={e => setNewCompetition(p => ({ ...p, nome: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
-              <textarea placeholder="Descrizione" value={newCompetition.descrizione} onChange={e => setNewCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" />
+              <textarea placeholder="Descrizione breve" value={newCompetition.descrizione} onChange={e => setNewCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" />
+              <div className="mb-4">
+                <label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento (opzionale)</label>
+                <RichTextEditor editorRef={regolamentoEditorRef} placeholder="Scrivi il regolamento..." />
+              </div>
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <div><label className="text-sm text-gray-600">Inizio</label><input type="date" value={newCompetition.dataInizio} onChange={e => setNewCompetition(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
                 <div><label className="text-sm text-gray-600">Fine</label><input type="date" value={newCompetition.dataFine} onChange={e => setNewCompetition(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
@@ -386,11 +429,15 @@ const Admin = () => {
               <h3 className="font-bold mb-3">Tutte le gare ({competitions.length})</h3>
               {competitions.map(c => (
                 <div key={c.id} className="p-4 bg-gray-50 rounded-xl border flex justify-between items-center mb-2">
-                  <div className="cursor-pointer" onClick={() => setSelectedCompetition(c)}>
+                  <div className="cursor-pointer flex-1" onClick={() => setSelectedCompetition(c)}>
                     <h4 className="font-semibold text-purple-700">{c.nome}</h4>
                     <p className="text-sm text-gray-500">{formatDate(c.dataInizio)} - {formatDate(c.dataFine)}</p>
+                    <p className="text-xs text-gray-400">{riddles.filter(r => r.competitionId === c.id).length} quiz • {c.participantsCount || 0} iscritti</p>
                   </div>
-                  <button onClick={() => setConfirmDelete({ type: 'competition', id: c.id, name: c.nome })} className="text-red-500 p-2"><Trash2 size={18} /></button>
+                  <div className="flex gap-2">
+                    <button onClick={() => startEditCompetition(c)} className="text-purple-600 p-2"><Edit3 size={18} /></button>
+                    <button onClick={() => setConfirmDelete({ type: 'competition', id: c.id, name: c.nome })} className="text-red-500 p-2"><Trash2 size={18} /></button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -407,12 +454,8 @@ const Admin = () => {
               </select>
               <input type="text" placeholder="Titolo *" value={newRiddle.titolo} onChange={e => setNewRiddle(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
               <div className="mb-3">
-                <div className="flex gap-2 mb-2">
-                  {[['bold', Bold], ['italic', Italic], ['justifyCenter', AlignCenter], ['justifyLeft', AlignLeft], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
-                    <button key={cmd} type="button" onClick={() => { editorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
-                  ))}
-                </div>
-                <div ref={editorRef} contentEditable className="w-full min-h-20 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white" />
+                <label className="text-sm text-gray-600 mb-2 block">Domanda *</label>
+                <RichTextEditor editorRef={riddleEditorRef} placeholder="Scrivi la domanda..." />
               </div>
               <input type="text" placeholder="Risposta (case-sensitive) *" value={newRiddle.risposta} onChange={e => setNewRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
               <div className="grid grid-cols-2 gap-3 mb-3">
@@ -465,12 +508,7 @@ const Admin = () => {
               <input type="text" placeholder="Titolo *" value={newAnnouncement.titolo} onChange={e => setNewAnnouncement(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
               <div className="mb-4">
                 <label className="text-sm text-gray-600 mb-2 block">Messaggio *</label>
-                <div className="flex gap-2 mb-2">
-                  {[['bold', Bold], ['italic', Italic], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
-                    <button key={cmd} type="button" onClick={() => { announcementEditorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
-                  ))}
-                </div>
-                <div ref={announcementEditorRef} contentEditable className="w-full min-h-32 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white focus:outline-none focus:border-purple-500" />
+                <RichTextEditor editorRef={announcementEditorRef} placeholder="Scrivi il messaggio..." />
               </div>
               <button onClick={handleAddAnnouncement} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">
                 {submitting ? <Loader2 size={18} className="animate-spin" /> : <><Megaphone size={18} /> Invia</>}
