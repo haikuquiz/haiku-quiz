@@ -102,6 +102,7 @@ const Admin = () => {
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const editorRef = useRef(null);
+  const announcementEditorRef = useRef(null);
 
   const showMsg = (msg, dur = 3000) => { setMessage(msg); if (dur > 0) setTimeout(() => setMessage(''), dur); };
 
@@ -185,11 +186,13 @@ const Admin = () => {
   };
 
   const handleAddAnnouncement = async () => {
-    if (!newAnnouncement.titolo || !newAnnouncement.messaggio) { showMsg('Compila tutti i campi'); return; }
+    const messaggio = announcementEditorRef.current?.innerHTML || '';
+    if (!newAnnouncement.titolo || !messaggio.trim()) { showMsg('Compila tutti i campi'); return; }
     setSubmitting(true);
     try {
-      await setDoc(doc(collection(db, 'announcements')), { titolo: newAnnouncement.titolo, messaggio: newAnnouncement.messaggio, createdAt: serverTimestamp() });
+      await setDoc(doc(collection(db, 'announcements')), { titolo: newAnnouncement.titolo, messaggio, createdAt: serverTimestamp() });
       setNewAnnouncement({ titolo: '', messaggio: '' });
+      if (announcementEditorRef.current) announcementEditorRef.current.innerHTML = '';
       showMsg('✅ Comunicazione inviata!');
     } catch (e) { showMsg('Errore: ' + e.message); }
     finally { setSubmitting(false); }
@@ -460,7 +463,15 @@ const Admin = () => {
             <div className="bg-white rounded-2xl p-5">
               <h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuovo Avviso</h3>
               <input type="text" placeholder="Titolo *" value={newAnnouncement.titolo} onChange={e => setNewAnnouncement(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
-              <textarea placeholder="Messaggio *" value={newAnnouncement.messaggio} onChange={e => setNewAnnouncement(p => ({ ...p, messaggio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-4 h-32" />
+              <div className="mb-4">
+                <label className="text-sm text-gray-600 mb-2 block">Messaggio *</label>
+                <div className="flex gap-2 mb-2">
+                  {[['bold', Bold], ['italic', Italic], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
+                    <button key={cmd} type="button" onClick={() => { announcementEditorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
+                  ))}
+                </div>
+                <div ref={announcementEditorRef} contentEditable className="w-full min-h-32 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white focus:outline-none focus:border-purple-500" />
+              </div>
               <button onClick={handleAddAnnouncement} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">
                 {submitting ? <Loader2 size={18} className="animate-spin" /> : <><Megaphone size={18} /> Invia</>}
               </button>
@@ -469,12 +480,12 @@ const Admin = () => {
               <h3 className="font-bold mb-3">Avvisi ({announcements.length})</h3>
               {announcements.map(a => (
                 <div key={a.id} className="p-4 bg-gray-50 rounded-xl border mb-2 flex justify-between">
-                  <div>
+                  <div className="flex-1">
                     <h4 className="font-semibold">{a.titolo}</h4>
-                    <p className="text-sm text-gray-600">{a.messaggio}</p>
-                    <p className="text-xs text-gray-400 mt-1">{formatDateTime(a.createdAt)}</p>
+                    <div className="text-sm text-gray-600 mt-1" dangerouslySetInnerHTML={{ __html: a.messaggio }} />
+                    <p className="text-xs text-gray-400 mt-2">{formatDateTime(a.createdAt)}</p>
                   </div>
-                  <button onClick={() => setConfirmDelete({ type: 'announcement', id: a.id, name: a.titolo })} className="text-red-500 p-1"><Trash2 size={16} /></button>
+                  <button onClick={() => setConfirmDelete({ type: 'announcement', id: a.id, name: a.titolo })} className="text-red-500 p-1 ml-2"><Trash2 size={16} /></button>
                 </div>
               ))}
             </div>

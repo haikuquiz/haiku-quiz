@@ -87,7 +87,7 @@ const AnnouncementPopup = ({ announcement, onClose, onMarkRead }) => {
             <p className="text-sm text-gray-500">{formatDate(announcement.createdAt)}</p>
           </div>
         </div>
-        <p className="text-gray-700 mb-6 whitespace-pre-wrap">{announcement.messaggio}</p>
+        <div className="text-gray-700 mb-6 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: announcement.messaggio }} />
         <button onClick={() => { onMarkRead(announcement.id); onClose(); }} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold">Ho capito</button>
       </div>
     </div>
@@ -295,12 +295,20 @@ const App = () => {
     return onSnapshot(query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(50)), (snap) => {
       const anns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setAnnouncements(anns);
-      if (user && anns.length > 0) {
-        const unread = anns.find(a => !readAnnouncements.includes(a.id));
-        if (unread && !showPopup) setShowPopup(unread);
-      }
     });
-  }, [user, readAnnouncements]);
+  }, []);
+
+  // Show popup only once per session for unread announcements
+  useEffect(() => {
+    if (user && announcements.length > 0 && !showPopup) {
+      const shownThisSession = JSON.parse(sessionStorage.getItem('shownAnnouncements') || '[]');
+      const unread = announcements.find(a => !readAnnouncements.includes(a.id) && !shownThisSession.includes(a.id));
+      if (unread) {
+        setShowPopup(unread);
+        sessionStorage.setItem('shownAnnouncements', JSON.stringify([...shownThisSession, unread.id]));
+      }
+    }
+  }, [user, announcements, readAnnouncements]);
 
   useEffect(() => {
     return onSnapshot(query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')), (snap) => {
@@ -630,7 +638,7 @@ const App = () => {
                             <h4 className="font-bold text-gray-800">{ann.titolo}</h4>
                             {!readAnnouncements.includes(ann.id) && <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full">Nuovo</span>}
                           </div>
-                          <p className="text-sm text-gray-600 mt-1">{ann.messaggio}</p>
+                          <div className="text-sm text-gray-600 mt-1" dangerouslySetInnerHTML={{ __html: ann.messaggio }} />
                           <p className="text-xs text-gray-400 mt-2">{formatDate(ann.createdAt)}</p>
                         </div>
                       </div>
