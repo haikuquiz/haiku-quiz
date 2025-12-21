@@ -4,10 +4,18 @@ import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 
+// Include secondi nell'orario
 const formatDateTime = (ts) => {
   if (!ts) return '-';
   const d = ts.toDate ? ts.toDate() : new Date(ts);
-  return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('it-IT', { 
+    day: '2-digit', 
+    month: '2-digit', 
+    year: 'numeric', 
+    hour: '2-digit', 
+    minute: '2-digit',
+    second: '2-digit'
+  });
 };
 
 const formatDate = (ts) => {
@@ -52,6 +60,22 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
   } catch (e) {
     console.error('Error assigning points:', e);
     return false;
+  }
+};
+
+// Salva stato navigazione
+const saveNavState = (state) => {
+  try {
+    localStorage.setItem('haikuNavState', JSON.stringify(state));
+  } catch (e) {}
+};
+
+const loadNavState = () => {
+  try {
+    const saved = localStorage.getItem('haikuNavState');
+    return saved ? JSON.parse(saved) : null;
+  } catch (e) {
+    return null;
   }
 };
 
@@ -111,21 +135,49 @@ const AnnouncementPopup = ({ announcement, onClose, onMarkRead }) => {
   );
 };
 
-const InAppNotification = ({ notification, onDismiss }) => {
+// Notifica fluttuante cliccabile
+const FloatingNotification = ({ notification, onDismiss, onNavigate }) => {
   if (!notification) return null;
   const isNew = notification.type === 'new_riddle';
   const isRes = notification.type === 'result';
+  
+  const handleClick = () => {
+    onNavigate(notification);
+    onDismiss(notification.id);
+  };
+  
   return (
-    <div className={`mb-4 p-4 rounded-xl border-2 ${isNew ? 'bg-green-50 border-green-300' : isRes ? 'bg-blue-50 border-blue-300' : 'bg-purple-50 border-purple-300'}`}>
-      <div className="flex items-start gap-3">
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isNew ? 'bg-green-100' : isRes ? 'bg-blue-100' : 'bg-purple-100'}`}>
-          {isNew ? <Star className="text-green-600" size={20} /> : isRes ? <Award className="text-blue-600" size={20} /> : <Bell className="text-purple-600" size={20} />}
+    <div className="fixed top-4 left-4 right-4 z-[100] max-w-lg mx-auto animate-slide-down">
+      <div 
+        onClick={handleClick}
+        className={`p-4 rounded-xl border-2 shadow-lg cursor-pointer transform transition-all hover:scale-[1.02] ${
+          isNew ? 'bg-green-50 border-green-400' : isRes ? 'bg-blue-50 border-blue-400' : 'bg-purple-50 border-purple-400'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+            isNew ? 'bg-green-100' : isRes ? 'bg-blue-100' : 'bg-purple-100'
+          }`}>
+            {isNew ? <Star className="text-green-600" size={20} /> : isRes ? <Award className="text-blue-600" size={20} /> : <Bell className="text-purple-600" size={20} />}
+          </div>
+          <div className="flex-1">
+            <p className={`font-semibold ${isNew ? 'text-green-800' : isRes ? 'text-blue-800' : 'text-purple-800'}`}>
+              {notification.title}
+            </p>
+            <p className={`text-sm ${isNew ? 'text-green-700' : isRes ? 'text-blue-700' : 'text-purple-700'}`}>
+              {notification.message}
+            </p>
+            <p className={`text-xs mt-1 ${isNew ? 'text-green-600' : isRes ? 'text-blue-600' : 'text-purple-600'}`}>
+              Tocca per {isNew ? 'rispondere' : 'vedere i risultati'}
+            </p>
+          </div>
+          <button 
+            onClick={(e) => { e.stopPropagation(); onDismiss(notification.id); }} 
+            className="text-gray-400 hover:text-gray-600 p-1"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div className="flex-1">
-          <p className={`font-semibold ${isNew ? 'text-green-800' : isRes ? 'text-blue-800' : 'text-purple-800'}`}>{notification.title}</p>
-          <p className={`text-sm ${isNew ? 'text-green-700' : isRes ? 'text-blue-700' : 'text-purple-700'}`}>{notification.message}</p>
-        </div>
-        <button onClick={() => onDismiss(notification.id)} className="text-gray-400"><X size={18} /></button>
       </div>
     </div>
   );
@@ -375,13 +427,25 @@ const App = () => {
   const [showPopup, setShowPopup] = useState(null);
   const [inAppNotifications, setInAppNotifications] = useState([]);
   const [dismissedNotifications, setDismissedNotifications] = useState([]);
+  const [floatingNotification, setFloatingNotification] = useState(null);
 
   const showMsg = useCallback((msg, dur = 3000) => {
     setMessage(msg);
     if (dur > 0) setTimeout(() => setMessage(''), dur);
   }, []);
 
-  // Auth listener
+  // Salva stato navigazione quando cambia
+  useEffect(() => {
+    if (user) {
+      saveNavState({
+        activeTab,
+        selectedCompetitionId: selectedCompetition?.id || null,
+        competitionTab
+      });
+    }
+  }, [activeTab, selectedCompetition, competitionTab, user]);
+
+  // Auth listener con ripristino stato
   useEffect(() => {
     return onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -394,6 +458,14 @@ const App = () => {
             setReadAnnouncements(data.readAnnouncements || []);
             setDismissedNotifications(data.dismissedNotifications || []);
           }
+          
+          // Ripristina stato navigazione
+          const savedState = loadNavState();
+          if (savedState) {
+            setActiveTab(savedState.activeTab || 'home');
+            setCompetitionTab(savedState.competitionTab || 'quiz');
+            // Competition verrà ripristinata dopo il caricamento delle competitions
+          }
         } catch (e) {
           console.error('Error loading user data:', e);
         }
@@ -405,6 +477,19 @@ const App = () => {
       setLoading(false);
     });
   }, []);
+
+  // Ripristina competition selezionata dopo caricamento
+  useEffect(() => {
+    if (competitions.length > 0 && user && !selectedCompetition) {
+      const savedState = loadNavState();
+      if (savedState?.selectedCompetitionId) {
+        const comp = competitions.find(c => c.id === savedState.selectedCompetitionId);
+        if (comp) {
+          setSelectedCompetition(comp);
+        }
+      }
+    }
+  }, [competitions, user]);
 
   // Load announcements
   useEffect(() => {
@@ -454,14 +539,13 @@ const App = () => {
     );
   }, [user]);
 
-  // Load riddles for selected competition - SENZA indice composto
+  // Load riddles for selected competition
   useEffect(() => {
     if (!selectedCompetition) {
       setRiddles([]);
       return;
     }
     
-    // Query semplice senza orderBy per evitare indice composto
     return onSnapshot(
       query(collection(db, 'riddles'), where('competitionId', '==', selectedCompetition.id)),
       async (snap) => {
@@ -472,7 +556,6 @@ const App = () => {
           const data = { id: docSnap.id, ...docSnap.data() };
           const end = data.dataFine?.toDate ? data.dataFine.toDate() : new Date(data.dataFine);
           
-          // Assign points if expired and not yet assigned
           if (now > end && !data.pointsAssigned) {
             try {
               await assignPointsForRiddle(docSnap.id, data);
@@ -484,7 +567,6 @@ const App = () => {
           list.push(data);
         }
         
-        // Sort in JavaScript instead of Firestore
         list.sort((a, b) => {
           const dateA = a.dataInizio?.toDate ? a.dataInizio.toDate() : new Date(a.dataInizio);
           const dateB = b.dataInizio?.toDate ? b.dataInizio.toDate() : new Date(b.dataInizio);
@@ -530,14 +612,13 @@ const App = () => {
     );
   }, [user]);
 
-  // Generate in-app notifications - Query semplice
+  // Generate in-app notifications e mostra floating
   useEffect(() => {
     if (!user || userCompetitions.length === 0) {
       setInAppNotifications([]);
       return;
     }
 
-    // Limita a 10 competizioni per il limite di Firebase "in"
     const compIds = userCompetitions.slice(0, 10);
     
     return onSnapshot(
@@ -546,6 +627,7 @@ const App = () => {
         const now = new Date();
         const notifications = [];
         const shown = JSON.parse(sessionStorage.getItem('shownRiddleNotifications') || '[]');
+        const floatingShown = JSON.parse(sessionStorage.getItem('floatingShown') || '[]');
 
         snap.docs.forEach(docSnap => {
           const riddle = { id: docSnap.id, ...docSnap.data() };
@@ -555,7 +637,7 @@ const App = () => {
 
           // New riddle notification
           if (now >= start && now <= end && !dismissedNotifications.includes(`new_${riddle.id}`) && !shown.includes(`new_${riddle.id}`)) {
-            notifications.push({
+            const notif = {
               id: `new_${riddle.id}`,
               type: 'new_riddle',
               title: `Nuovo quiz: ${riddle.titolo}`,
@@ -563,7 +645,14 @@ const App = () => {
               riddleId: riddle.id,
               competitionId: riddle.competitionId,
               expiry: end
-            });
+            };
+            notifications.push(notif);
+            
+            // Mostra floating se non già mostrato
+            if (!floatingShown.includes(notif.id)) {
+              setFloatingNotification(notif);
+              sessionStorage.setItem('floatingShown', JSON.stringify([...floatingShown, notif.id]));
+            }
           }
 
           // Result notification
@@ -571,19 +660,25 @@ const App = () => {
             const ans = userAnswers[riddle.id];
             if (ans) {
               const correct = compareAnswers(ans.answer, riddle.risposta);
-              notifications.push({
+              const notif = {
                 id: `result_${riddle.id}`,
                 type: 'result',
                 title: `Risultato: ${riddle.titolo}`,
                 message: correct ? `Hai guadagnato ${ans.points || 0} punti!` : `Risposta errata. Soluzione: ${riddle.risposta}`,
                 riddleId: riddle.id,
                 competitionId: riddle.competitionId
-              });
+              };
+              notifications.push(notif);
+              
+              // Mostra floating se non già mostrato
+              if (!floatingShown.includes(notif.id)) {
+                setFloatingNotification(notif);
+                sessionStorage.setItem('floatingShown', JSON.stringify([...floatingShown, notif.id]));
+              }
             }
           }
         });
 
-        // Filter old notifications
         const activeNew = notifications.filter(n => n.type === 'new_riddle');
         const filtered = notifications.filter(n => {
           if (n.type !== 'new_riddle') return true;
@@ -616,6 +711,20 @@ const App = () => {
     const interval = setInterval(check, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Naviga alla notifica
+  const handleNotificationNavigate = (notification) => {
+    const comp = competitions.find(c => c.id === notification.competitionId);
+    if (comp) {
+      setSelectedCompetition(comp);
+      if (notification.type === 'new_riddle') {
+        setCompetitionTab('quiz');
+      } else if (notification.type === 'result') {
+        setCompetitionTab('classifica');
+      }
+    }
+    setFloatingNotification(null);
+  };
 
   const handleRegister = async () => {
     if (authLoading) return;
@@ -654,6 +763,7 @@ const App = () => {
   };
 
   const handleLogout = async () => {
+    localStorage.removeItem('haikuNavState');
     await signOut(auth);
     setSelectedCompetition(null);
     setViewingRiddle(null);
@@ -694,7 +804,6 @@ const App = () => {
       isCorrect: null
     };
     
-    // Optimistic update
     setUserAnswers(prev => ({ ...prev, [riddleId]: answerData }));
     showMsg('✅ Inviata!');
     
@@ -740,6 +849,8 @@ const App = () => {
     const shown = JSON.parse(sessionStorage.getItem('shownRiddleNotifications') || '[]');
     sessionStorage.setItem('shownRiddleNotifications', JSON.stringify([...shown, notifId]));
     
+    setFloatingNotification(null);
+    
     try {
       await updateDoc(doc(db, 'users', user.uid), { dismissedNotifications: newDismissed });
     } catch (e) {
@@ -747,7 +858,6 @@ const App = () => {
     }
   };
 
-  // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center">
@@ -756,10 +866,10 @@ const App = () => {
     );
   }
 
-  // Viewing riddle answers
   if (viewingRiddle) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 p-4 pb-24">
+        <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
         <div className="max-w-lg mx-auto">
           <RiddleAnswersView
             riddle={viewingRiddle}
@@ -773,7 +883,6 @@ const App = () => {
     );
   }
 
-  // Competition view
   if (selectedCompetition && user) {
     const isJoined = userCompetitions.includes(selectedCompetition.id);
     const now = new Date();
@@ -792,10 +901,11 @@ const App = () => {
     const userScore = competitionScores.find(s => s.oderId === user.uid);
     const sortedScores = [...competitionScores].sort((a, b) => (b.points || 0) - (a.points || 0));
     const userRank = sortedScores.findIndex(s => s.oderId === user.uid) + 1;
-    const compNotifs = inAppNotifications.filter(n => n.competitionId === selectedCompetition.id);
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
+        <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
+        
         <div className="bg-white rounded-b-3xl shadow-lg p-4 mb-4">
           <div className="max-w-lg mx-auto flex items-center gap-3">
             <button onClick={() => { setSelectedCompetition(null); setCompetitionTab('quiz'); }} className="p-2 hover:bg-gray-100 rounded-xl">
@@ -823,8 +933,6 @@ const App = () => {
 
               {competitionTab === 'quiz' && (
                 <>
-                  {compNotifs.map(n => <InAppNotification key={n.id} notification={n} onDismiss={handleDismissNotification} />)}
-                  
                   {activeRiddles.length > 0 && (
                     <div className="mb-6">
                       <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
@@ -899,12 +1007,12 @@ const App = () => {
     );
   }
 
-  // Main view
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
   const joinedComps = competitions.filter(c => userCompetitions.includes(c.id));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
+      <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
       <AnnouncementPopup announcement={showPopup} onClose={() => setShowPopup(null)} onMarkRead={handleMarkAnnouncementRead} />
 
       <div className="bg-white rounded-b-3xl shadow-lg p-6 mb-6">
@@ -977,10 +1085,6 @@ const App = () => {
           <>
             {activeTab === 'home' && (
               <>
-                {inAppNotifications.slice(0, 3).map(n => (
-                  <InAppNotification key={n.id} notification={n} onDismiss={handleDismissNotification} />
-                ))}
-                
                 {unreadAnnouncements.length > 0 && (
                   <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('notifications')}>
                     <Bell className="text-purple-600" size={20} />
@@ -1095,6 +1199,16 @@ const App = () => {
       </div>
 
       {user && <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} hasNotifications={unreadAnnouncements.length > 0} />}
+      
+      <style>{`
+        @keyframes slide-down {
+          from { transform: translateY(-100%); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-slide-down {
+          animation: slide-down 0.3s ease-out;
+        }
+      `}</style>
     </div>
   );
 };
