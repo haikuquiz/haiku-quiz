@@ -6,8 +6,30 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebas
 
 const ADMIN_EMAILS = ['haikuquizofficial@gmail.com'];
 
-const formatDateTime = (ts) => { if (!ts) return '-'; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-const formatDate = (ts) => { if (!ts) return '-'; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleDateString('it-IT'); };
+const formatDateTime = (ts) => {
+  if (!ts) return '-';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const formatDate = (ts) => {
+  if (!ts) return '-';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('it-IT');
+};
+
+const formatDateForInput = (ts) => {
+  if (!ts) return '';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toISOString().split('T')[0];
+};
+
+const formatTimeForInput = (ts) => {
+  if (!ts) return '09:00';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toTimeString().slice(0, 5);
+};
+
 const compareAnswers = (a, b) => a?.trim() === b?.trim();
 
 const AdminBottomNav = ({ activeTab, setActiveTab }) => (
@@ -28,16 +50,24 @@ const AdminBottomNav = ({ activeTab, setActiveTab }) => (
   </div>
 );
 
-const RichTextEditor = ({ editorRef, placeholder }) => (
-  <div className="mb-3">
-    <div className="flex gap-2 mb-2">
-      {[['bold', Bold], ['italic', Italic], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
-        <button key={cmd} type="button" onClick={() => { editorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
-      ))}
+const RichTextEditor = ({ editorRef, placeholder, initialContent }) => {
+  useEffect(() => {
+    if (editorRef.current && initialContent !== undefined) {
+      editorRef.current.innerHTML = initialContent;
+    }
+  }, [initialContent, editorRef]);
+
+  return (
+    <div className="mb-3">
+      <div className="flex gap-2 mb-2">
+        {[['bold', Bold], ['italic', Italic], ['insertUnorderedList', List]].map(([cmd, Icon]) => (
+          <button key={cmd} type="button" onClick={() => { editorRef.current?.focus(); document.execCommand(cmd, false, null); }} className="p-2 border rounded-lg hover:bg-gray-100"><Icon size={16} /></button>
+        ))}
+      </div>
+      <div ref={editorRef} contentEditable className="w-full min-h-24 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white focus:outline-none focus:border-purple-500" data-placeholder={placeholder} />
     </div>
-    <div ref={editorRef} contentEditable className="w-full min-h-24 px-4 py-3 border-2 border-gray-200 rounded-xl bg-white focus:outline-none focus:border-purple-500" data-placeholder={placeholder} />
-  </div>
-);
+  );
+};
 
 const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
   const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
@@ -93,16 +123,19 @@ const Admin = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedCompetition, setSelectedCompetition] = useState(null);
   const [editingCompetition, setEditingCompetition] = useState(null);
+  const [editingRiddle, setEditingRiddle] = useState(null);
   const [newCompetition, setNewCompetition] = useState({ nome: '', descrizione: '', dataInizio: '', dataFine: '' });
   const [newRiddle, setNewRiddle] = useState({ titolo: '', risposta: '', competitionId: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00', puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1 });
   const [newAnnouncement, setNewAnnouncement] = useState({ titolo: '' });
   const [showPuntiCustom, setShowPuntiCustom] = useState(false);
+  const [showEditPuntiCustom, setShowEditPuntiCustom] = useState(false);
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   
   const riddleEditorRef = useRef(null);
+  const editRiddleEditorRef = useRef(null);
   const announcementEditorRef = useRef(null);
   const regolamentoEditorRef = useRef(null);
 
@@ -189,6 +222,53 @@ const Admin = () => {
       showMsg('✅ Indovinello creato!');
     } catch (e) { showMsg('Errore: ' + e.message); }
     finally { setSubmitting(false); }
+  };
+
+  const handleUpdateRiddle = async () => {
+    if (!editingRiddle) return;
+    const domanda = editRiddleEditorRef.current?.innerHTML || '';
+    if (!editingRiddle.titolo || !domanda || !editingRiddle.risposta) { showMsg('Compila tutti i campi'); return; }
+    
+    setSubmitting(true);
+    try {
+      const start = new Date(`${editingRiddle.dataInizio}T${editingRiddle.oraInizio}:00`);
+      const end = new Date(`${editingRiddle.dataFine}T${editingRiddle.oraFine}:00`);
+      
+      await updateDoc(doc(db, 'riddles', editingRiddle.id), { 
+        titolo: editingRiddle.titolo, 
+        domanda, 
+        risposta: editingRiddle.risposta.trim(), 
+        competitionId: editingRiddle.competitionId,
+        dataInizio: Timestamp.fromDate(start), 
+        dataFine: Timestamp.fromDate(end), 
+        punti: { 
+          primo: parseInt(editingRiddle.puntoPrimo) || 3, 
+          secondo: parseInt(editingRiddle.puntoSecondo) || 1, 
+          terzo: parseInt(editingRiddle.puntoTerzo) || 1, 
+          altri: parseInt(editingRiddle.puntoAltri) || 1 
+        }
+      });
+      setEditingRiddle(null);
+      setShowEditPuntiCustom(false);
+      showMsg('✅ Indovinello aggiornato!');
+    } catch (e) { showMsg('Errore: ' + e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  const startEditRiddle = (riddle) => {
+    const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+    setEditingRiddle({
+      ...riddle,
+      dataInizio: formatDateForInput(riddle.dataInizio),
+      oraInizio: formatTimeForInput(riddle.dataInizio),
+      dataFine: formatDateForInput(riddle.dataFine),
+      oraFine: formatTimeForInput(riddle.dataFine),
+      puntoPrimo: punti.primo,
+      puntoSecondo: punti.secondo,
+      puntoTerzo: punti.terzo,
+      puntoAltri: punti.altri
+    });
+    setShowEditPuntiCustom(false);
   };
 
   const handleAddAnnouncement = async () => {
@@ -286,6 +366,61 @@ const Admin = () => {
     </div>
   );
 
+  // Schermata modifica indovinello
+  if (editingRiddle) return (
+    <div className="min-h-screen bg-gray-100 p-4 pb-24">
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-6">
+            <button onClick={() => { setEditingRiddle(null); setShowEditPuntiCustom(false); }} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button>
+            <h2 className="text-xl font-bold text-gray-800">Modifica Indovinello</h2>
+            {editingRiddle.pointsAssigned && (
+              <span className="ml-auto text-xs bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">⚠️ Quiz già concluso</span>
+            )}
+          </div>
+          
+          <select value={editingRiddle.competitionId} onChange={e => setEditingRiddle(p => ({ ...p, competitionId: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3">
+            <option value="">-- Seleziona gara --</option>
+            {competitions.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </select>
+          
+          <input type="text" placeholder="Titolo *" value={editingRiddle.titolo} onChange={e => setEditingRiddle(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
+          
+          <div className="mb-3">
+            <label className="text-sm text-gray-600 mb-2 block">Domanda *</label>
+            <RichTextEditor editorRef={editRiddleEditorRef} placeholder="Scrivi la domanda..." initialContent={editingRiddle.domanda} />
+          </div>
+          
+          <input type="text" placeholder="Risposta (case-sensitive) *" value={editingRiddle.risposta} onChange={e => setEditingRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
+          
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div><label className="text-sm text-gray-600">Data inizio</label><input type="date" value={editingRiddle.dataInizio} onChange={e => setEditingRiddle(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
+            <div><label className="text-sm text-gray-600">Ora inizio</label><input type="time" value={editingRiddle.oraInizio} onChange={e => setEditingRiddle(p => ({ ...p, oraInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div><label className="text-sm text-gray-600">Data fine</label><input type="date" value={editingRiddle.dataFine} onChange={e => setEditingRiddle(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
+            <div><label className="text-sm text-gray-600">Ora fine</label><input type="time" value={editingRiddle.oraFine} onChange={e => setEditingRiddle(p => ({ ...p, oraFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div>
+          </div>
+          
+          <button type="button" onClick={() => setShowEditPuntiCustom(!showEditPuntiCustom)} className="text-sm text-purple-600 mb-3"><Trophy size={14} className="inline" /> Punteggi</button>
+          {showEditPuntiCustom && (
+            <div className="mb-3 p-3 bg-purple-50 rounded-xl grid grid-cols-4 gap-2">
+              <div><label className="text-xs">1°</label><input type="number" min="0" value={editingRiddle.puntoPrimo} onChange={e => setEditingRiddle(p => ({ ...p, puntoPrimo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div>
+              <div><label className="text-xs">2°</label><input type="number" min="0" value={editingRiddle.puntoSecondo} onChange={e => setEditingRiddle(p => ({ ...p, puntoSecondo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div>
+              <div><label className="text-xs">3°</label><input type="number" min="0" value={editingRiddle.puntoTerzo} onChange={e => setEditingRiddle(p => ({ ...p, puntoTerzo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div>
+              <div><label className="text-xs">Altri</label><input type="number" min="0" value={editingRiddle.puntoAltri} onChange={e => setEditingRiddle(p => ({ ...p, puntoAltri: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div>
+            </div>
+          )}
+          
+          <button onClick={handleUpdateRiddle} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">
+            {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Salva modifiche'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (editingCompetition) return (
     <div className="min-h-screen bg-gray-100 p-4 pb-24">
       <div className="max-w-4xl mx-auto">
@@ -298,7 +433,7 @@ const Admin = () => {
           <textarea placeholder="Descrizione breve" value={editingCompetition.descrizione || ''} onChange={e => setEditingCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" />
           <div className="mb-4">
             <label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento (opzionale)</label>
-            <RichTextEditor editorRef={regolamentoEditorRef} placeholder="Scrivi il regolamento della competizione..." />
+            <RichTextEditor editorRef={regolamentoEditorRef} placeholder="Scrivi il regolamento della competizione..." initialContent={editingCompetition.regolamento} />
           </div>
           <button onClick={handleUpdateCompetition} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">
             {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Salva modifiche'}
@@ -328,11 +463,14 @@ const Admin = () => {
             <h3 className="font-bold mb-3">Indovinelli ({compRiddles.length})</h3>
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {compRiddles.map(r => (
-                <div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between">
-                  <div>
+                <div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between items-start">
+                  <div className="flex-1">
                     <span className="font-medium">{r.titolo}</span>
-                    <button onClick={() => viewAnswers(r)} className="ml-2 text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button>
-                    <p className="text-xs text-gray-500">Risposta: {r.risposta}</p>
+                    <div className="flex gap-1 mt-1">
+                      <button onClick={() => viewAnswers(r)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button>
+                      <button onClick={() => startEditRiddle(r)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded"><Edit3 size={12} className="inline" /> Modifica</button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Risposta: {r.risposta}</p>
                     {r.pointsAssigned ? <span className="text-xs text-green-600"><Check size={12} className="inline" /> Completato</span> : <span className="text-xs text-yellow-600">In corso</span>}
                   </div>
                   <button onClick={() => setConfirmDelete({ type: 'riddle', id: r.id, name: r.titolo })} className="text-red-500 p-1"><Trash2 size={16} /></button>
@@ -485,12 +623,16 @@ const Admin = () => {
                 {riddles.map(r => {
                   const comp = competitions.find(c => c.id === r.competitionId);
                   return (
-                    <div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between">
-                      <div>
+                    <div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between items-start">
+                      <div className="flex-1">
                         <span className="font-medium">{r.titolo}</span>
                         <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{comp?.nome || 'N/A'}</span>
-                        <button onClick={() => viewAnswers(r)} className="ml-2 text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button>
-                        <p className="text-xs text-gray-500">Risposta: {r.risposta}</p>
+                        <div className="flex gap-1 mt-1">
+                          <button onClick={() => viewAnswers(r)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button>
+                          <button onClick={() => startEditRiddle(r)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded"><Edit3 size={12} className="inline" /> Modifica</button>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Risposta: {r.risposta}</p>
+                        <p className="text-xs text-gray-400">{formatDateTime(r.dataInizio)} - {formatDateTime(r.dataFine)}</p>
                       </div>
                       <button onClick={() => setConfirmDelete({ type: 'riddle', id: r.id, name: r.titolo })} className="text-red-500 p-1"><Trash2 size={16} /></button>
                     </div>
