@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award } from 'lucide-react';
+import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -62,7 +62,6 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
   }
 };
 
-// Salva stato navigazione - usa sessionStorage per persistere durante refresh
 const saveNavState = (state) => {
   try {
     sessionStorage.setItem('haikuNavState', JSON.stringify({
@@ -77,7 +76,6 @@ const loadNavState = () => {
     const saved = sessionStorage.getItem('haikuNavState');
     if (!saved) return null;
     const state = JSON.parse(saved);
-    // Valido per 1 ora
     if (Date.now() - state.timestamp > 3600000) {
       sessionStorage.removeItem('haikuNavState');
       return null;
@@ -192,7 +190,6 @@ const FloatingNotification = ({ notification, onDismiss, onNavigate }) => {
 };
 
 const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank, competitionRiddles }) => {
-  // Calcola date dinamiche dagli haiku
   const now = new Date();
   let start, end, isActive, isPast;
   
@@ -242,6 +239,32 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
   );
 };
 
+// Card per indovinelli programmati (non ancora pubblicati)
+const ScheduledRiddleCard = ({ riddle }) => {
+  const start = riddle.dataInizio?.toDate ? riddle.dataInizio.toDate() : new Date(riddle.dataInizio);
+  const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+
+  return (
+    <div className="rounded-2xl p-4 bg-blue-50 border-2 border-blue-200 border-dashed">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+          <Calendar className="text-blue-600" size={20} />
+        </div>
+        <div className="flex-1">
+          <h3 className="font-bold text-gray-800">{riddle.titolo}</h3>
+          <p className="text-xs text-blue-600">Disponibile dal {formatDateTime(start)}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
+        <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
+        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
+        <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
+      </div>
+    </div>
+  );
+};
+
 const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, showViewButton }) => {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -264,6 +287,11 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
     }
   };
 
+  // Se non è ancora pubblicato, mostra la card programmata
+  if (!isPublished) {
+    return <ScheduledRiddleCard riddle={riddle} />;
+  }
+
   return (
     <div className={`rounded-2xl p-5 ${isExpired ? 'bg-gray-50' : 'bg-purple-50'}`}>
       <div className="flex justify-between items-start mb-3">
@@ -275,57 +303,51 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
         )}
       </div>
       
-      {!isPublished ? (
-        <p className="text-gray-500">Disponibile dal {formatDate(riddle.dataInizio)}</p>
-      ) : (
-        <>
-          <div className="text-gray-700 mb-4" dangerouslySetInnerHTML={{ __html: riddle.domanda }} />
-          <div className="flex flex-wrap gap-2 mb-3">
-            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
-            <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
-            <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
-            <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
-          </div>
-          
-          {isExpired ? (
-            <div className="bg-white rounded-xl p-4 border">
-              <p className="text-sm text-gray-600">Risposta: <strong className="text-purple-700">{riddle.risposta}</strong></p>
-              {hasAnswered && (
-                <p className="text-sm mt-2">
-                  Tua: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}
-                </p>
-              )}
-            </div>
-          ) : !hasAnswered ? (
-            <>
-              <p className="text-xs text-gray-500 mb-2">Scade: {formatDateTime(riddle.dataFine)}</p>
-              <p className="text-xs text-red-500 mb-3 font-medium">⚠️ Un solo tentativo!</p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Risposta..."
-                  value={answer}
-                  onChange={e => setAnswer(e.target.value)}
-                  onKeyPress={e => e.key === 'Enter' && handleSubmit()}
-                  className="flex-1 px-4 py-3 border-2 border-purple-200 rounded-xl"
-                />
-                <button
-                  onClick={handleSubmit}
-                  disabled={submitting || !answer.trim()}
-                  className="px-6 py-3 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300"
-                >
-                  {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Invia'}
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <p className="text-green-700 font-medium flex items-center gap-2">
-                <Check size={18} /> Inviata: "{userAnswer}"
-              </p>
-            </div>
+      <div className="text-gray-700 mb-4" dangerouslySetInnerHTML={{ __html: riddle.domanda }} />
+      <div className="flex flex-wrap gap-2 mb-3">
+        <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
+        <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
+        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
+        <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
+      </div>
+      
+      {isExpired ? (
+        <div className="bg-white rounded-xl p-4 border">
+          <p className="text-sm text-gray-600">Risposta: <strong className="text-purple-700">{riddle.risposta}</strong></p>
+          {hasAnswered && (
+            <p className="text-sm mt-2">
+              Tua: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}
+            </p>
           )}
+        </div>
+      ) : !hasAnswered ? (
+        <>
+          <p className="text-xs text-gray-500 mb-2">Scade: {formatDateTime(riddle.dataFine)}</p>
+          <p className="text-xs text-red-500 mb-3 font-medium">⚠️ Un solo tentativo!</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Risposta..."
+              value={answer}
+              onChange={e => setAnswer(e.target.value)}
+              onKeyPress={e => e.key === 'Enter' && handleSubmit()}
+              className="flex-1 px-4 py-3 border-2 border-purple-200 rounded-xl"
+            />
+            <button
+              onClick={handleSubmit}
+              disabled={submitting || !answer.trim()}
+              className="px-6 py-3 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300"
+            >
+              {submitting ? <Loader2 size={18} className="animate-spin" /> : 'Invia'}
+            </button>
+          </div>
         </>
+      ) : (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+          <p className="text-green-700 font-medium flex items-center gap-2">
+            <Check size={18} /> Inviata: "{userAnswer}"
+          </p>
+        </div>
       )}
     </div>
   );
@@ -395,7 +417,6 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
 };
 
 const CompetitionInfoView = ({ competition, competitionRiddles }) => {
-  // Calcola date dinamiche
   let start, end;
   if (competitionRiddles && competitionRiddles.length > 0) {
     const dates = competitionRiddles.map(r => ({
@@ -440,7 +461,6 @@ const CompetitionInfoView = ({ competition, competitionRiddles }) => {
 };
 
 const App = () => {
-  // Carica stato iniziale da sessionStorage
   const savedState = useRef(loadNavState());
   
   const [user, setUser] = useState(null);
@@ -477,7 +497,6 @@ const App = () => {
     if (dur > 0) setTimeout(() => setMessage(''), dur);
   }, []);
 
-  // Salva stato navigazione quando cambia
   useEffect(() => {
     if (user && initialStateRestored) {
       saveNavState({
@@ -489,7 +508,6 @@ const App = () => {
     }
   }, [activeTab, selectedCompetition, competitionTab, viewingRiddle, user, initialStateRestored]);
 
-  // Auth listener
   useEffect(() => {
     return onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -516,7 +534,6 @@ const App = () => {
     });
   }, []);
 
-  // Load announcements
   useEffect(() => {
     return onSnapshot(
       query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(50)),
@@ -525,7 +542,6 @@ const App = () => {
     );
   }, []);
 
-  // Show popup once per session
   useEffect(() => {
     if (user && announcements.length > 0 && !showPopup) {
       const shown = JSON.parse(sessionStorage.getItem('shownAnnouncements') || '[]');
@@ -537,7 +553,6 @@ const App = () => {
     }
   }, [user, announcements, readAnnouncements, showPopup]);
 
-  // Load competitions
   useEffect(() => {
     return onSnapshot(
       query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')),
@@ -546,7 +561,6 @@ const App = () => {
     );
   }, []);
 
-  // Load ALL riddles for date calculations
   useEffect(() => {
     return onSnapshot(
       query(collection(db, 'riddles')),
@@ -555,7 +569,6 @@ const App = () => {
     );
   }, []);
 
-  // Ripristina stato salvato dopo caricamento competitions
   useEffect(() => {
     if (competitions.length > 0 && user && !initialStateRestored && savedState.current) {
       const state = savedState.current;
@@ -573,7 +586,6 @@ const App = () => {
     }
   }, [competitions, user, initialStateRestored]);
 
-  // Load user competition scores
   useEffect(() => {
     if (!user) {
       setUserCompetitions([]);
@@ -591,7 +603,6 @@ const App = () => {
     );
   }, [user]);
 
-  // Load riddles for selected competition
   useEffect(() => {
     if (!selectedCompetition) {
       setRiddles([]);
@@ -622,7 +633,7 @@ const App = () => {
         list.sort((a, b) => {
           const dateA = a.dataInizio?.toDate ? a.dataInizio.toDate() : new Date(a.dataInizio);
           const dateB = b.dataInizio?.toDate ? b.dataInizio.toDate() : new Date(b.dataInizio);
-          return dateB - dateA;
+          return dateA - dateB; // Ordine cronologico (prima i più vecchi)
         });
         
         setRiddles(list);
@@ -631,7 +642,6 @@ const App = () => {
     );
   }, [selectedCompetition]);
 
-  // Load competition scores
   useEffect(() => {
     if (!selectedCompetition) {
       setCompetitionScores([]);
@@ -644,7 +654,6 @@ const App = () => {
     );
   }, [selectedCompetition]);
 
-  // Load user answers
   useEffect(() => {
     if (!user) {
       setUserAnswers({});
@@ -664,7 +673,6 @@ const App = () => {
     );
   }, [user]);
 
-  // Generate in-app notifications
   useEffect(() => {
     if (!user || userCompetitions.length === 0) {
       setInAppNotifications([]);
@@ -739,7 +747,6 @@ const App = () => {
     );
   }, [user, userCompetitions, competitions, dismissedNotifications, userAnswers]);
 
-  // Periodic check for expired riddles
   useEffect(() => {
     const check = async () => {
       try {
@@ -905,8 +912,27 @@ const App = () => {
     }
   };
 
-  // Helper per ottenere riddles di una competition
   const getRiddlesForCompetition = (compId) => allRiddles.filter(r => r.competitionId === compId);
+
+  // Helper per verificare se una gara è attiva (basata sui suoi riddles)
+  const isCompetitionActive = (comp) => {
+    const compRiddles = getRiddlesForCompetition(comp.id);
+    const now = new Date();
+    
+    if (compRiddles.length > 0) {
+      const dates = compRiddles.map(r => ({
+        start: r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio),
+        end: r.dataFine?.toDate ? r.dataFine.toDate() : new Date(r.dataFine)
+      }));
+      const start = new Date(Math.min(...dates.map(d => d.start.getTime())));
+      const end = new Date(Math.max(...dates.map(d => d.end.getTime())));
+      return now >= start && now <= end;
+    } else {
+      const start = comp.dataInizio?.toDate ? comp.dataInizio.toDate() : new Date(comp.dataInizio);
+      const end = comp.dataFine?.toDate ? comp.dataFine.toDate() : new Date(comp.dataFine);
+      return now >= start && now <= end;
+    }
+  };
 
   if (loading) {
     return (
@@ -936,6 +962,12 @@ const App = () => {
   if (selectedCompetition && user) {
     const isJoined = userCompetitions.includes(selectedCompetition.id);
     const now = new Date();
+    
+    // Dividi i riddles in categorie
+    const scheduledRiddles = riddles.filter(r => {
+      const s = r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio);
+      return now < s;
+    });
     
     const activeRiddles = riddles.filter(r => {
       const s = r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio);
@@ -1004,10 +1036,23 @@ const App = () => {
                     </div>
                   )}
                   
-                  {activeRiddles.length === 0 && (
+                  {activeRiddles.length === 0 && scheduledRiddles.length === 0 && pastRiddles.length === 0 && (
                     <div className="bg-white rounded-2xl p-8 text-center mb-6">
                       <Clock size={48} className="mx-auto text-gray-300 mb-4" />
-                      <p className="text-gray-600">Nessun quiz attivo</p>
+                      <p className="text-gray-600">Nessun quiz disponibile</p>
+                    </div>
+                  )}
+
+                  {scheduledRiddles.length > 0 && (
+                    <div className="mb-6">
+                      <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+                        <Calendar className="text-blue-500" /> In arrivo ({scheduledRiddles.length})
+                      </h3>
+                      <div className="space-y-3">
+                        {scheduledRiddles.map(r => (
+                          <ScheduledRiddleCard key={r.id} riddle={r} />
+                        ))}
+                      </div>
                     </div>
                   )}
                   
@@ -1058,7 +1103,14 @@ const App = () => {
   }
 
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
-  const joinedComps = competitions.filter(c => userCompetitions.includes(c.id));
+  
+  // Solo gare ATTIVE a cui l'utente partecipa (per la home)
+  const activeJoinedComps = competitions.filter(c => 
+    userCompetitions.includes(c.id) && isCompetitionActive(c)
+  );
+  
+  // Tutte le gare a cui l'utente partecipa (per la sezione gare)
+  const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
@@ -1143,11 +1195,11 @@ const App = () => {
                   </div>
                 )}
                 
-                {joinedComps.length > 0 ? (
+                {activeJoinedComps.length > 0 ? (
                   <div className="mb-6">
-                    <h3 className="font-bold text-gray-800 mb-3">Le tue gare</h3>
+                    <h3 className="font-bold text-gray-800 mb-3">Gare attive</h3>
                     <div className="space-y-4">
-                      {joinedComps.map(comp => {
+                      {activeJoinedComps.map(comp => {
                         const usd = allUserScores.find(s => s.competitionId === comp.id);
                         const compRiddles = getRiddlesForCompetition(comp.id);
                         return (
@@ -1168,7 +1220,7 @@ const App = () => {
                 ) : (
                   <div className="bg-white rounded-2xl p-8 text-center mb-6">
                     <Flag size={48} className="mx-auto text-purple-200 mb-4" />
-                    <p className="text-gray-600 font-medium">Non sei iscritto a nessuna gara</p>
+                    <p className="text-gray-600 font-medium">Nessuna gara attiva</p>
                     <button onClick={() => setActiveTab('competitions')} className="mt-4 bg-purple-600 text-white px-6 py-3 rounded-xl font-semibold">
                       Scopri le gare
                     </button>
@@ -1179,23 +1231,45 @@ const App = () => {
 
             {activeTab === 'competitions' && (
               <div className="space-y-4">
+                {allJoinedComps.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="font-bold text-gray-800 mb-3">Le tue gare</h3>
+                    <div className="space-y-4">
+                      {allJoinedComps.map(comp => {
+                        const usd = allUserScores.find(s => s.competitionId === comp.id);
+                        const compRiddles = getRiddlesForCompetition(comp.id);
+                        return (
+                          <CompetitionCard
+                            key={comp.id}
+                            competition={comp}
+                            isJoined={true}
+                            onJoin={handleJoinCompetition}
+                            onSelect={setSelectedCompetition}
+                            userScore={usd?.points}
+                            competitionRiddles={compRiddles}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                
                 <h3 className="font-bold text-gray-800">Tutte le gare</h3>
                 {competitions.length === 0 ? (
                   <div className="bg-white rounded-2xl p-8 text-center">
                     <p className="text-gray-500">Nessuna gara</p>
                   </div>
                 ) : (
-                  competitions.map(comp => {
-                    const usd = allUserScores.find(s => s.competitionId === comp.id);
+                  competitions.filter(c => !userCompetitions.includes(c.id)).map(comp => {
                     const compRiddles = getRiddlesForCompetition(comp.id);
                     return (
                       <CompetitionCard
                         key={comp.id}
                         competition={comp}
-                        isJoined={userCompetitions.includes(comp.id)}
+                        isJoined={false}
                         onJoin={handleJoinCompetition}
                         onSelect={setSelectedCompetition}
-                        userScore={usd?.points}
+                        userScore={0}
                         competitionRiddles={compRiddles}
                       />
                     );
