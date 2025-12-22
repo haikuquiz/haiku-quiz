@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 
-// Include secondi nell'orario
 const formatDateTime = (ts) => {
   if (!ts) return '-';
   const d = ts.toDate ? ts.toDate() : new Date(ts);
@@ -63,17 +62,27 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
   }
 };
 
-// Salva stato navigazione
+// Salva stato navigazione - usa sessionStorage per persistere durante refresh
 const saveNavState = (state) => {
   try {
-    localStorage.setItem('haikuNavState', JSON.stringify(state));
+    sessionStorage.setItem('haikuNavState', JSON.stringify({
+      ...state,
+      timestamp: Date.now()
+    }));
   } catch (e) {}
 };
 
 const loadNavState = () => {
   try {
-    const saved = localStorage.getItem('haikuNavState');
-    return saved ? JSON.parse(saved) : null;
+    const saved = sessionStorage.getItem('haikuNavState');
+    if (!saved) return null;
+    const state = JSON.parse(saved);
+    // Valido per 1 ora
+    if (Date.now() - state.timestamp > 3600000) {
+      sessionStorage.removeItem('haikuNavState');
+      return null;
+    }
+    return state;
   } catch (e) {
     return null;
   }
@@ -135,7 +144,6 @@ const AnnouncementPopup = ({ announcement, onClose, onMarkRead }) => {
   );
 };
 
-// Notifica fluttuante cliccabile
 const FloatingNotification = ({ notification, onDismiss, onNavigate }) => {
   if (!notification) return null;
   const isNew = notification.type === 'new_riddle';
@@ -183,12 +191,25 @@ const FloatingNotification = ({ notification, onDismiss, onNavigate }) => {
   );
 };
 
-const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank }) => {
+const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank, competitionRiddles }) => {
+  // Calcola date dinamiche dagli haiku
   const now = new Date();
-  const start = competition.dataInizio?.toDate ? competition.dataInizio.toDate() : new Date(competition.dataInizio);
-  const end = competition.dataFine?.toDate ? competition.dataFine.toDate() : new Date(competition.dataFine);
-  const isActive = now >= start && now <= end;
-  const isPast = now > end;
+  let start, end, isActive, isPast;
+  
+  if (competitionRiddles && competitionRiddles.length > 0) {
+    const dates = competitionRiddles.map(r => ({
+      start: r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio),
+      end: r.dataFine?.toDate ? r.dataFine.toDate() : new Date(r.dataFine)
+    }));
+    start = new Date(Math.min(...dates.map(d => d.start.getTime())));
+    end = new Date(Math.max(...dates.map(d => d.end.getTime())));
+  } else {
+    start = competition.dataInizio?.toDate ? competition.dataInizio.toDate() : new Date(competition.dataInizio);
+    end = competition.dataFine?.toDate ? competition.dataFine.toDate() : new Date(competition.dataFine);
+  }
+  
+  isActive = now >= start && now <= end;
+  isPast = now > end;
 
   return (
     <div className={`bg-white rounded-2xl p-5 border-2 ${isJoined ? 'border-purple-400' : 'border-gray-100'}`}>
@@ -207,7 +228,7 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
         </span>
       </div>
       {competition.descrizione && <p className="text-sm text-gray-600 mb-3">{competition.descrizione}</p>}
-      <p className="text-xs text-gray-400 mb-3">{formatDate(competition.dataInizio)} - {formatDate(competition.dataFine)}</p>
+      <p className="text-xs text-gray-400 mb-3">{formatDate(start)} - {formatDate(end)}</p>
       {isJoined && (
         <div className="bg-purple-50 rounded-xl p-3 mb-3 flex justify-between items-center">
           <span className="flex items-center gap-1"><Crown size={16} className="text-yellow-500" /> {userScore || 0} pt</span>
@@ -373,51 +394,73 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
   );
 };
 
-const CompetitionInfoView = ({ competition }) => (
-  <div className="space-y-4">
-    <div className="bg-white rounded-2xl p-5">
-      <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-        <Info size={18} className="text-purple-600" /> Informazioni
-      </h3>
-      <div className="space-y-2 text-sm text-gray-600">
-        <p><strong>Periodo:</strong> {formatDate(competition.dataInizio)} - {formatDate(competition.dataFine)}</p>
-        <p><strong>Partecipanti:</strong> {competition.participantsCount || 0}</p>
-        {competition.descrizione && <p><strong>Descrizione:</strong> {competition.descrizione}</p>}
-      </div>
-    </div>
-    {competition.regolamento ? (
+const CompetitionInfoView = ({ competition, competitionRiddles }) => {
+  // Calcola date dinamiche
+  let start, end;
+  if (competitionRiddles && competitionRiddles.length > 0) {
+    const dates = competitionRiddles.map(r => ({
+      start: r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio),
+      end: r.dataFine?.toDate ? r.dataFine.toDate() : new Date(r.dataFine)
+    }));
+    start = new Date(Math.min(...dates.map(d => d.start.getTime())));
+    end = new Date(Math.max(...dates.map(d => d.end.getTime())));
+  } else {
+    start = competition.dataInizio?.toDate ? competition.dataInizio.toDate() : new Date(competition.dataInizio);
+    end = competition.dataFine?.toDate ? competition.dataFine.toDate() : new Date(competition.dataFine);
+  }
+
+  return (
+    <div className="space-y-4">
       <div className="bg-white rounded-2xl p-5">
         <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-          <FileText size={18} className="text-purple-600" /> Regolamento
+          <Info size={18} className="text-purple-600" /> Informazioni
         </h3>
-        <div className="prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: competition.regolamento }} />
+        <div className="space-y-2 text-sm text-gray-600">
+          <p><strong>Periodo:</strong> {formatDate(start)} - {formatDate(end)}</p>
+          <p><strong>Partecipanti:</strong> {competition.participantsCount || 0}</p>
+          <p><strong>Quiz totali:</strong> {competitionRiddles?.length || 0}</p>
+          {competition.descrizione && <p><strong>Descrizione:</strong> {competition.descrizione}</p>}
+        </div>
       </div>
-    ) : (
-      <div className="bg-gray-50 rounded-2xl p-8 text-center">
-        <FileText size={40} className="mx-auto text-gray-300 mb-3" />
-        <p className="text-gray-500">Nessun regolamento disponibile</p>
-      </div>
-    )}
-  </div>
-);
+      {competition.regolamento ? (
+        <div className="bg-white rounded-2xl p-5">
+          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+            <FileText size={18} className="text-purple-600" /> Regolamento
+          </h3>
+          <div className="prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: competition.regolamento }} />
+        </div>
+      ) : (
+        <div className="bg-gray-50 rounded-2xl p-8 text-center">
+          <FileText size={40} className="mx-auto text-gray-300 mb-3" />
+          <p className="text-gray-500">Nessun regolamento disponibile</p>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const App = () => {
+  // Carica stato iniziale da sessionStorage
+  const savedState = useRef(loadNavState());
+  
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [initialStateRestored, setInitialStateRestored] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState(savedState.current?.activeTab || 'home');
   const [competitions, setCompetitions] = useState([]);
   const [userCompetitions, setUserCompetitions] = useState([]);
   const [selectedCompetition, setSelectedCompetition] = useState(null);
-  const [competitionTab, setCompetitionTab] = useState('quiz');
+  const [competitionTab, setCompetitionTab] = useState(savedState.current?.competitionTab || 'quiz');
   const [competitionScores, setCompetitionScores] = useState([]);
   const [riddles, setRiddles] = useState([]);
+  const [allRiddles, setAllRiddles] = useState([]);
   const [allUserScores, setAllUserScores] = useState([]);
   const [userAnswers, setUserAnswers] = useState({});
   const [viewingRiddle, setViewingRiddle] = useState(null);
@@ -436,16 +479,17 @@ const App = () => {
 
   // Salva stato navigazione quando cambia
   useEffect(() => {
-    if (user) {
+    if (user && initialStateRestored) {
       saveNavState({
         activeTab,
         selectedCompetitionId: selectedCompetition?.id || null,
-        competitionTab
+        competitionTab,
+        viewingRiddleId: viewingRiddle?.id || null
       });
     }
-  }, [activeTab, selectedCompetition, competitionTab, user]);
+  }, [activeTab, selectedCompetition, competitionTab, viewingRiddle, user, initialStateRestored]);
 
-  // Auth listener con ripristino stato
+  // Auth listener
   useEffect(() => {
     return onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -458,14 +502,6 @@ const App = () => {
             setReadAnnouncements(data.readAnnouncements || []);
             setDismissedNotifications(data.dismissedNotifications || []);
           }
-          
-          // Ripristina stato navigazione
-          const savedState = loadNavState();
-          if (savedState) {
-            setActiveTab(savedState.activeTab || 'home');
-            setCompetitionTab(savedState.competitionTab || 'quiz');
-            // Competition verrà ripristinata dopo il caricamento delle competitions
-          }
         } catch (e) {
           console.error('Error loading user data:', e);
         }
@@ -473,23 +509,12 @@ const App = () => {
         setUser(null);
         setUserData(null);
         setSelectedCompetition(null);
+        setViewingRiddle(null);
+        sessionStorage.removeItem('haikuNavState');
       }
       setLoading(false);
     });
   }, []);
-
-  // Ripristina competition selezionata dopo caricamento
-  useEffect(() => {
-    if (competitions.length > 0 && user && !selectedCompetition) {
-      const savedState = loadNavState();
-      if (savedState?.selectedCompetitionId) {
-        const comp = competitions.find(c => c.id === savedState.selectedCompetitionId);
-        if (comp) {
-          setSelectedCompetition(comp);
-        }
-      }
-    }
-  }, [competitions, user]);
 
   // Load announcements
   useEffect(() => {
@@ -520,6 +545,33 @@ const App = () => {
       (err) => console.error('Competitions error:', err)
     );
   }, []);
+
+  // Load ALL riddles for date calculations
+  useEffect(() => {
+    return onSnapshot(
+      query(collection(db, 'riddles')),
+      (snap) => setAllRiddles(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (err) => console.error('All riddles error:', err)
+    );
+  }, []);
+
+  // Ripristina stato salvato dopo caricamento competitions
+  useEffect(() => {
+    if (competitions.length > 0 && user && !initialStateRestored && savedState.current) {
+      const state = savedState.current;
+      
+      if (state.selectedCompetitionId) {
+        const comp = competitions.find(c => c.id === state.selectedCompetitionId);
+        if (comp) {
+          setSelectedCompetition(comp);
+        }
+      }
+      
+      setInitialStateRestored(true);
+    } else if (competitions.length > 0 && user && !initialStateRestored) {
+      setInitialStateRestored(true);
+    }
+  }, [competitions, user, initialStateRestored]);
 
   // Load user competition scores
   useEffect(() => {
@@ -612,7 +664,7 @@ const App = () => {
     );
   }, [user]);
 
-  // Generate in-app notifications e mostra floating
+  // Generate in-app notifications
   useEffect(() => {
     if (!user || userCompetitions.length === 0) {
       setInAppNotifications([]);
@@ -635,7 +687,6 @@ const App = () => {
           const end = riddle.dataFine?.toDate ? riddle.dataFine.toDate() : new Date(riddle.dataFine);
           const comp = competitions.find(c => c.id === riddle.competitionId);
 
-          // New riddle notification
           if (now >= start && now <= end && !dismissedNotifications.includes(`new_${riddle.id}`) && !shown.includes(`new_${riddle.id}`)) {
             const notif = {
               id: `new_${riddle.id}`,
@@ -648,14 +699,12 @@ const App = () => {
             };
             notifications.push(notif);
             
-            // Mostra floating se non già mostrato
             if (!floatingShown.includes(notif.id)) {
               setFloatingNotification(notif);
               sessionStorage.setItem('floatingShown', JSON.stringify([...floatingShown, notif.id]));
             }
           }
 
-          // Result notification
           if (now > end && riddle.pointsAssigned && !dismissedNotifications.includes(`result_${riddle.id}`) && !shown.includes(`result_${riddle.id}`)) {
             const ans = userAnswers[riddle.id];
             if (ans) {
@@ -670,7 +719,6 @@ const App = () => {
               };
               notifications.push(notif);
               
-              // Mostra floating se non già mostrato
               if (!floatingShown.includes(notif.id)) {
                 setFloatingNotification(notif);
                 sessionStorage.setItem('floatingShown', JSON.stringify([...floatingShown, notif.id]));
@@ -712,7 +760,6 @@ const App = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Naviga alla notifica
   const handleNotificationNavigate = (notification) => {
     const comp = competitions.find(c => c.id === notification.competitionId);
     if (comp) {
@@ -763,7 +810,7 @@ const App = () => {
   };
 
   const handleLogout = async () => {
-    localStorage.removeItem('haikuNavState');
+    sessionStorage.removeItem('haikuNavState');
     await signOut(auth);
     setSelectedCompetition(null);
     setViewingRiddle(null);
@@ -857,6 +904,9 @@ const App = () => {
       console.error('Dismiss error:', e);
     }
   };
+
+  // Helper per ottenere riddles di una competition
+  const getRiddlesForCompetition = (compId) => allRiddles.filter(r => r.competitionId === compId);
 
   if (loading) {
     return (
@@ -993,7 +1043,7 @@ const App = () => {
                 </div>
               )}
 
-              {competitionTab === 'info' && <CompetitionInfoView competition={selectedCompetition} />}
+              {competitionTab === 'info' && <CompetitionInfoView competition={selectedCompetition} competitionRiddles={riddles} />}
             </>
           )}
         </div>
@@ -1099,6 +1149,7 @@ const App = () => {
                     <div className="space-y-4">
                       {joinedComps.map(comp => {
                         const usd = allUserScores.find(s => s.competitionId === comp.id);
+                        const compRiddles = getRiddlesForCompetition(comp.id);
                         return (
                           <CompetitionCard
                             key={comp.id}
@@ -1108,6 +1159,7 @@ const App = () => {
                             onSelect={setSelectedCompetition}
                             userScore={usd?.points}
                             userRank={null}
+                            competitionRiddles={compRiddles}
                           />
                         );
                       })}
@@ -1135,6 +1187,7 @@ const App = () => {
                 ) : (
                   competitions.map(comp => {
                     const usd = allUserScores.find(s => s.competitionId === comp.id);
+                    const compRiddles = getRiddlesForCompetition(comp.id);
                     return (
                       <CompetitionCard
                         key={comp.id}
@@ -1143,6 +1196,7 @@ const App = () => {
                         onJoin={handleJoinCompetition}
                         onSelect={setSelectedCompetition}
                         userScore={usd?.points}
+                        competitionRiddles={compRiddles}
                       />
                     );
                   })
