@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Plus, Trash2, LogOut, Bold, Italic, List, Eye, Check, Loader2, ArrowLeft, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid, FileText, Edit3 } from 'lucide-react';
+import { Settings, Plus, Trash2, LogOut, Bold, Italic, List, Eye, Check, Loader2, ArrowLeft, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid, FileText, Edit3, RefreshCw } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -30,7 +30,121 @@ const formatTimeForInput = (ts) => {
   return d.toTimeString().slice(0, 5);
 };
 
-const compareAnswers = (a, b) => a?.trim() === b?.trim();
+const compareAnswers = (a, b) => {
+  if (!a || !b) return false;
+  return a.trim() === b.trim();
+};
+
+// Funzione CORRETTA per ricalcolare i punti di un indovinello
+const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
+  const log = onLog || console.log;
+  
+  try {
+    log(`\n📝 Ricalcolo: "${riddle.titolo}"`);
+    log(`   Risposta corretta: "${riddle.risposta}"`);
+    
+    // 1. Recupera tutte le risposte per questo indovinello
+    const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
+    const answers = [];
+    answersSnap.forEach(d => answers.push({ id: d.id, ref: d.ref, ...d.data() }));
+    
+    log(`   Risposte totali: ${answers.length}`);
+    
+    if (answers.length === 0) {
+      log(`   ⚠️ Nessuna risposta trovata`);
+      await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true });
+      return { success: true, processed: 0 };
+    }
+    
+    // 2. Ordina per timestamp (più vecchio prima)
+    answers.sort((a, b) => {
+      const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
+      const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
+      return timeA - timeB;
+    });
+    
+    // 3. Calcola i punti per posizione
+    const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+    const getPoints = (pos) => {
+      if (pos === 0) return punti.primo;
+      if (pos === 1) return punti.secondo;
+      if (pos === 2) return punti.terzo;
+      return punti.altri;
+    };
+    
+    // 4. Prima azzera i punti di questo riddle da tutti gli score della competizione
+    if (riddle.competitionId) {
+      // Recupera tutti i punteggi precedenti di questo riddle
+      const oldAnswersWithPoints = answers.filter(a => a.points > 0);
+      for (const oldAns of oldAnswersWithPoints) {
+        const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oldAns.userId}`);
+        const scoreDoc = await getDoc(scoreRef);
+        if (scoreDoc.exists()) {
+          const currentPoints = scoreDoc.data().points || 0;
+          const newPoints = Math.max(0, currentPoints - oldAns.points);
+          await updateDoc(scoreRef, { points: newPoints });
+          log(`   🔄 Rimossi ${oldAns.points} punti da utente ${oldAns.userId} (${currentPoints} → ${newPoints})`);
+        }
+      }
+    }
+    
+    // 5. Assegna i nuovi punti
+    let correctPosition = 0;
+    const updates = [];
+    
+    for (let i = 0; i < answers.length; i++) {
+      const ans = answers[i];
+      const isCorrect = compareAnswers(ans.answer, riddle.risposta);
+      let points = 0;
+      
+      if (isCorrect) {
+        points = getPoints(correctPosition);
+        log(`   ✅ #${i + 1} "${ans.answer}" - CORRETTO (pos ${correctPosition + 1}) → ${points} punti`);
+        correctPosition++;
+      } else {
+        log(`   ❌ #${i + 1} "${ans.answer}" - ERRATO → 0 punti`);
+      }
+      
+      updates.push({
+        ref: ans.ref,
+        oderId: ans.userId,
+        points,
+        isCorrect
+      });
+    }
+    
+    // 6. Esegui tutti gli aggiornamenti delle risposte
+    for (const upd of updates) {
+      await updateDoc(upd.ref, { points: upd.points, isCorrect: upd.isCorrect });
+    }
+    
+    // 7. Aggiorna i punteggi della competizione
+    if (riddle.competitionId) {
+      for (const upd of updates) {
+        if (upd.points > 0) {
+          const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${upd.oderId}`);
+          const scoreDoc = await getDoc(scoreRef);
+          if (scoreDoc.exists()) {
+            const currentPoints = scoreDoc.data().points || 0;
+            await updateDoc(scoreRef, { points: currentPoints + upd.points });
+            log(`   📊 Aggiunti ${upd.points} punti a utente ${upd.oderId}`);
+          }
+        }
+      }
+    }
+    
+    // 8. Marca il riddle come processato
+    await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp() });
+    
+    log(`   ✅ Completato! ${correctPosition} risposte corrette`);
+    return { success: true, processed: answers.length, correct: correctPosition };
+    
+  } catch (e) {
+    log(`   ❌ ERRORE: ${e.message}`);
+    console.error('Errore ricalcolo:', e);
+    return { success: false, error: e.message };
+  }
+};
 
 const AdminBottomNav = ({ activeTab, setActiveTab }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-2 py-2 z-50">
@@ -69,8 +183,12 @@ const RichTextEditor = ({ editorRef, placeholder, initialContent }) => {
   );
 };
 
-const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
-  const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
+const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, recalculating }) => {
+  const sorted = [...answers].sort((a, b) => {
+    const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
+    const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
+    return timeA - timeB;
+  });
   const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
   
@@ -78,7 +196,15 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
     <div className="bg-white rounded-2xl shadow-xl p-6">
       <div className="flex items-center gap-3 mb-4">
         <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button>
-        <h3 className="text-xl font-bold text-purple-700">{riddle.titolo}</h3>
+        <h3 className="text-xl font-bold text-purple-700 flex-1">{riddle.titolo}</h3>
+        <button 
+          onClick={() => onRecalculate(riddle)} 
+          disabled={recalculating}
+          className="flex items-center gap-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-xl hover:bg-orange-200 disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={recalculating ? 'animate-spin' : ''} />
+          {recalculating ? 'Ricalcolo...' : 'Ricalcola punti'}
+        </button>
       </div>
       <div className="mb-4 p-4 bg-gray-50 rounded-xl border">
         <p className="text-xs text-gray-500 mb-2 font-semibold uppercase">Domanda:</p>
@@ -88,6 +214,12 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
         <p className="text-sm font-semibold text-purple-700">Risposta: {riddle.risposta}</p>
         <p className="text-xs text-gray-500 mt-1">Punti: 1° {punti.primo} | 2° {punti.secondo} | 3° {punti.terzo} | Altri {punti.altri}</p>
         <p className="text-xs text-gray-500 mt-1">Periodo: {formatDateTime(riddle.dataInizio)} → {formatDateTime(riddle.dataFine)}</p>
+        <p className="text-xs mt-2">
+          Stato: {riddle.pointsAssigned ? 
+            <span className="text-green-600 font-medium">✅ Punti assegnati</span> : 
+            <span className="text-yellow-600 font-medium">⏳ In attesa</span>
+          }
+        </p>
       </div>
       <h4 className="font-semibold text-gray-700 mb-3">Risposte ({sorted.length})</h4>
       {sorted.length === 0 ? <p className="text-gray-500 text-center py-8">Nessuna risposta</p> : (
@@ -95,16 +227,25 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack }) => {
           {sorted.map((ans, i) => {
             const correct = compareAnswers(ans.answer, riddle.risposta);
             return (
-              <div key={ans.id} className="p-3 rounded-xl border bg-white flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${correct ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>{i + 1}</span>
-                  <div>
-                    <span className="font-medium">{userMap[ans.userId] || 'Utente'}</span>
-                    <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
-                    <p className={`text-sm ${correct ? 'text-green-700' : 'text-red-600'}`}>"{ans.answer}"</p>
+              <div key={ans.id} className={`p-3 rounded-xl border ${correct ? 'bg-green-50 border-green-200' : 'bg-white'}`}>
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${correct ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>{i + 1}</span>
+                    <div>
+                      <span className="font-medium">{userMap[ans.userId] || ans.userId}</span>
+                      <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
+                      <p className={`text-sm ${correct ? 'text-green-700 font-medium' : 'text-red-600'}`}>"{ans.answer}"</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className={`font-bold text-lg ${ans.points > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                      {ans.points > 0 ? `+${ans.points}` : '0'}
+                    </span>
+                    <p className="text-xs text-gray-400">
+                      {ans.isCorrect === true ? '✓' : ans.isCorrect === false ? '✗' : '?'}
+                    </p>
                   </div>
                 </div>
-                <span className={`font-bold ${ans.points > 0 ? 'text-green-600' : 'text-red-500'}`}>{riddle.pointsAssigned ? (ans.points > 0 ? `+${ans.points}` : '0') : '-'}</span>
               </div>
             );
           })}
@@ -140,6 +281,8 @@ const Admin = () => {
   const [riddleAnswers, setRiddleAnswers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [recalculating, setRecalculating] = useState(false);
+  const [recalcLog, setRecalcLog] = useState([]);
   
   const riddleEditorRef = useRef(null);
   const editRiddleEditorRef = useRef(null);
@@ -156,6 +299,39 @@ const Admin = () => {
   useEffect(() => { if (!isAdmin || !selectedCompetition) { setCompetitionScores([]); return; } return onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', selectedCompetition.id)), (snap) => { setCompetitionScores(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin, selectedCompetition]);
 
   const handleLogin = async () => { if (authLoading) return; setAuthLoading(true); try { const cred = await signInWithEmailAndPassword(auth, email, password); if (!ADMIN_EMAILS.includes(cred.user.email)) { await signOut(auth); showMsg('Accesso non autorizzato'); } } catch { showMsg('Credenziali errate'); } finally { setAuthLoading(false); } };
+
+  const handleRecalculatePoints = async (riddle) => {
+    setRecalculating(true);
+    setRecalcLog([]);
+    
+    const logs = [];
+    const logFn = (msg) => {
+      logs.push(msg);
+      setRecalcLog([...logs]);
+    };
+    
+    try {
+      const result = await recalculateRiddlePoints(riddle.id, riddle, logFn);
+      
+      if (result.success) {
+        showMsg(`✅ Punti ricalcolati! ${result.correct || 0} risposte corrette su ${result.processed || 0}`);
+        // Ricarica le risposte
+        const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddle.id)));
+        setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        // Aggiorna il riddle nella lista
+        const riddleDoc = await getDoc(doc(db, 'riddles', riddle.id));
+        if (riddleDoc.exists()) {
+          setViewingRiddle({ id: riddleDoc.id, ...riddleDoc.data() });
+        }
+      } else {
+        showMsg(`❌ Errore: ${result.error}`);
+      }
+    } catch (e) {
+      showMsg(`❌ Errore: ${e.message}`);
+    } finally {
+      setRecalculating(false);
+    }
+  };
 
   const handleAddCompetition = async () => {
     if (!newCompetition.nome || !newCompetition.dataInizio || !newCompetition.dataFine) { showMsg('Compila tutti i campi'); return; }
@@ -254,7 +430,13 @@ const Admin = () => {
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); setConfirmDelete(null); }
   };
 
-  const viewAnswers = async (r) => { setViewingRiddle(r); const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', r.id))); setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() }))); };
+  const viewAnswers = async (r) => { 
+    setViewingRiddle(r); 
+    setRecalcLog([]);
+    const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', r.id))); 
+    setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() }))); 
+  };
+  
   const startEditCompetition = (comp) => { setEditingCompetition({ ...comp }); setTimeout(() => { if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = comp.regolamento || ''; }, 100); };
 
   if (loading) return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><Loader2 className="animate-spin text-purple-600" size={40} /></div>;
@@ -271,7 +453,25 @@ const Admin = () => {
     </div>
   );
 
-  if (viewingRiddle) return (<div className="min-h-screen bg-gray-100 p-4 pb-24"><div className="max-w-4xl mx-auto"><RiddleAnswersView riddle={viewingRiddle} answers={riddleAnswers} users={[...users, ...competitionScores]} onBack={() => setViewingRiddle(null)} /></div></div>);
+  if (viewingRiddle) return (
+    <div className="min-h-screen bg-gray-100 p-4 pb-24">
+      <div className="max-w-4xl mx-auto">
+        <RiddleAnswersView 
+          riddle={viewingRiddle} 
+          answers={riddleAnswers} 
+          users={[...users, ...competitionScores]} 
+          onBack={() => { setViewingRiddle(null); setRecalcLog([]); }}
+          onRecalculate={handleRecalculatePoints}
+          recalculating={recalculating}
+        />
+        {recalcLog.length > 0 && (
+          <div className="mt-4 bg-gray-900 text-green-400 p-4 rounded-xl font-mono text-xs max-h-60 overflow-y-auto">
+            {recalcLog.map((log, i) => <div key={i}>{log}</div>)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   if (editingRiddle) return (
     <div className="min-h-screen bg-gray-100 p-4 pb-24">

@@ -36,7 +36,14 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
     const answers = [];
     answersSnap.forEach(d => answers.push({ id: d.id, ref: d.ref, ...d.data() }));
-    answers.sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
+    
+    // Ordinamento corretto per timestamp
+    answers.sort((a, b) => {
+      const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
+      const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
+      return timeA - timeB;
+    });
+    
     let correctPos = 0;
     for (const ans of answers) {
       const isCorrect = compareAnswers(ans.answer, riddle.risposta);
