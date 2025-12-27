@@ -2,6 +2,13 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
+// Debug: mostra in console se le variabili sono caricate
+console.log('Firebase Config Check:', {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ? '✓ Presente' : '✗ MANCANTE',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ? '✓ Presente' : '✗ MANCANTE',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ? '✓ Presente' : '✗ MANCANTE',
+});
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
