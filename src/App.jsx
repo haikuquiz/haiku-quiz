@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar } from 'lucide-react';
+import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar, Settings, Edit3, Save } from 'lucide-react';
 import { db, auth } from './firebase';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit, Timestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendEmailVerification } from 'firebase/auth';
 
 const formatDateTime = (ts) => {
   if (!ts) return '-';
@@ -30,6 +30,15 @@ const getPointsForPosition = (pos, riddle) => {
   return pos === 0 ? p.primo : pos === 1 ? p.secondo : pos === 2 ? p.terzo : p.altri;
 };
 
+// Calcola bonus in base al numero di risposte corrette
+const getBonusPoints = (correctCount, riddle) => {
+  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  if (correctCount === 1) return bonus.uno || 0;
+  if (correctCount >= 2 && correctCount <= 5) return bonus.finoCinque || 0;
+  if (correctCount >= 6 && correctCount <= 10) return bonus.seiDieci || 0;
+  return 0; // più di 10, nessun bonus
+};
+
 const assignPointsForRiddle = async (riddleId, riddle) => {
   if (riddle.pointsAssigned) return false;
   try {
@@ -44,12 +53,17 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
       return timeA - timeB;
     });
     
+    // Prima conta le risposte corrette per calcolare il bonus
+    const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta));
+    const correctCount = correctAnswers.length;
+    const bonus = getBonusPoints(correctCount, riddle);
+    
     let correctPos = 0;
     for (const ans of answers) {
       const isCorrect = compareAnswers(ans.answer, riddle.risposta);
       let points = 0;
       if (isCorrect) {
-        points = getPointsForPosition(correctPos, riddle);
+        points = getPointsForPosition(correctPos, riddle) + bonus;
         correctPos++;
         if (riddle.competitionId) {
           const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${ans.userId}`);
@@ -59,9 +73,9 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
           }
         }
       }
-      await updateDoc(ans.ref, { points, isCorrect });
+      await updateDoc(ans.ref, { points, isCorrect, bonus: isCorrect ? bonus : 0 });
     }
-    await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp() });
+    await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp(), correctCount });
     return true;
   } catch (e) {
     console.error('Error assigning points:', e);
@@ -99,7 +113,8 @@ const BottomNav = ({ activeTab, setActiveTab, hasNotifications }) => (
       {[
         { id: 'home', icon: Home, label: 'Home' },
         { id: 'competitions', icon: Flag, label: 'Gare' },
-        { id: 'notifications', icon: Bell, label: 'Avvisi', badge: hasNotifications }
+        { id: 'notifications', icon: Bell, label: 'Avvisi', badge: hasNotifications },
+        { id: 'profile', icon: User, label: 'Profilo' }
       ].map(tab => (
         <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center px-3 py-1 rounded-lg relative ${activeTab === tab.id ? 'text-purple-600' : 'text-gray-500'}`}>
           <tab.icon size={24} />
@@ -196,6 +211,98 @@ const FloatingNotification = ({ notification, onDismiss, onNavigate }) => {
   );
 };
 
+const BackToast = ({ show }) => {
+  if (!show) return null;
+  return (
+    <div className="fixed bottom-24 left-4 right-4 z-[100] max-w-lg mx-auto">
+      <div className="bg-gray-800 text-white p-3 rounded-xl text-center text-sm">
+        Premi di nuovo per uscire
+      </div>
+    </div>
+  );
+};
+
+const ProfileView = ({ userData, user, onUpdateUsername, updating, canChangeUsername, daysUntilChange }) => {
+  const [editingUsername, setEditingUsername] = useState(false);
+  const [newUsername, setNewUsername] = useState(userData?.username || '');
+  const [error, setError] = useState('');
+
+  const handleSave = async () => {
+    if (newUsername.trim().length < 3) {
+      setError('Minimo 3 caratteri');
+      return;
+    }
+    const success = await onUpdateUsername(newUsername.trim());
+    if (success) {
+      setEditingUsername(false);
+      setError('');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl p-6">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center">
+            <User size={32} className="text-purple-600" />
+          </div>
+          <div className="flex-1">
+            {editingUsername ? (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newUsername}
+                  onChange={e => setNewUsername(e.target.value)}
+                  className="flex-1 px-3 py-2 border-2 border-purple-200 rounded-xl"
+                  placeholder="Nuovo username"
+                />
+                <button onClick={handleSave} disabled={updating} className="p-2 bg-green-500 text-white rounded-xl">
+                  {updating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
+                </button>
+                <button onClick={() => { setEditingUsername(false); setNewUsername(userData?.username || ''); setError(''); }} className="p-2 bg-gray-200 rounded-xl">
+                  <X size={20} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-gray-800">{userData?.username}</h2>
+                {canChangeUsername && (
+                  <button onClick={() => setEditingUsername(true)} className="p-1 text-purple-600">
+                    <Edit3 size={18} />
+                  </button>
+                )}
+              </div>
+            )}
+            <p className="text-sm text-gray-500">{user?.email}</p>
+            {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+          </div>
+        </div>
+        
+        {!canChangeUsername && daysUntilChange > 0 && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 mb-4">
+            <p className="text-sm text-yellow-700">
+              ⏳ Potrai cambiare username tra {daysUntilChange} giorni
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div className="flex justify-between py-3 border-b">
+            <span className="text-gray-600">Email verificata</span>
+            <span className={user?.emailVerified ? 'text-green-600' : 'text-red-500'}>
+              {user?.emailVerified ? '✓ Sì' : '✗ No'}
+            </span>
+          </div>
+          <div className="flex justify-between py-3 border-b">
+            <span className="text-gray-600">Membro dal</span>
+            <span className="text-gray-800">{formatDate(userData?.createdAt)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank, competitionRiddles }) => {
   const now = new Date();
   let start, end, isActive, isPast;
@@ -246,10 +353,11 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
   );
 };
 
-// Card per indovinelli programmati (non ancora pubblicati)
 const ScheduledRiddleCard = ({ riddle }) => {
   const start = riddle.dataInizio?.toDate ? riddle.dataInizio.toDate() : new Date(riddle.dataInizio);
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
 
   return (
     <div className="rounded-2xl p-4 bg-blue-50 border-2 border-blue-200 border-dashed">
@@ -268,6 +376,14 @@ const ScheduledRiddleCard = ({ riddle }) => {
         <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
         <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
       </div>
+      {hasBonus && (
+        <div className="mt-2 p-2 bg-green-50 rounded-lg">
+          <p className="text-xs text-green-700 font-medium">🎁 Bonus pochi rispondenti:</p>
+          <p className="text-xs text-green-600">
+            Solo 1: +{bonus.uno} | Max 5: +{bonus.finoCinque} | 6-10: +{bonus.seiDieci}
+          </p>
+        </div>
+      )}
     </div>
   );
 };
@@ -282,6 +398,8 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
   const isPublished = now >= start;
   const isExpired = now > end;
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
 
   const handleSubmit = async () => {
     if (!answer.trim() || submitting) return;
@@ -294,7 +412,6 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
     }
   };
 
-  // Se non è ancora pubblicato, mostra la card programmata
   if (!isPublished) {
     return <ScheduledRiddleCard riddle={riddle} />;
   }
@@ -318,9 +435,21 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
         <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
       </div>
       
+      {hasBonus && !isExpired && (
+        <div className="mb-3 p-2 bg-green-50 rounded-lg">
+          <p className="text-xs text-green-700 font-medium">🎁 Bonus pochi rispondenti:</p>
+          <p className="text-xs text-green-600">
+            Solo 1: +{bonus.uno} | Max 5: +{bonus.finoCinque} | 6-10: +{bonus.seiDieci}
+          </p>
+        </div>
+      )}
+      
       {isExpired ? (
         <div className="bg-white rounded-xl p-4 border">
           <p className="text-sm text-gray-600">Risposta: <strong className="text-purple-700">{riddle.risposta}</strong></p>
+          {riddle.correctCount !== undefined && (
+            <p className="text-xs text-gray-500 mt-1">Risposte corrette: {riddle.correctCount}</p>
+          )}
           {hasAnswered && (
             <p className="text-sm mt-2">
               Tua: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}
@@ -381,7 +510,11 @@ const CompetitionLeaderboard = ({ scores, currentUserId }) => {
 };
 
 const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) => {
-  const sorted = [...answers].sort((a, b) => (a.time?.toDate?.() || 0) - (b.time?.toDate?.() || 0));
+  const sorted = [...answers].sort((a, b) => {
+    const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
+    const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
+    return timeA - timeB;
+  });
   const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
   
   return (
@@ -392,6 +525,9 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
       </div>
       <div className="mb-4 p-4 bg-purple-50 rounded-xl">
         <p className="text-sm font-semibold text-purple-700">Risposta: {riddle.risposta}</p>
+        {riddle.correctCount !== undefined && (
+          <p className="text-xs text-gray-500 mt-1">Risposte corrette: {riddle.correctCount}</p>
+        )}
       </div>
       {sorted.length === 0 ? (
         <p className="text-gray-500 text-center py-8">Nessuna risposta</p>
@@ -409,9 +545,14 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
                       <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
                     </div>
                   </div>
-                  <span className={`font-bold ${ans.points > 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {riddle.pointsAssigned ? (ans.points > 0 ? `+${ans.points}` : '0') : '-'}
-                  </span>
+                  <div className="text-right">
+                    <span className={`font-bold ${ans.points > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                      {riddle.pointsAssigned ? (ans.points > 0 ? `+${ans.points}` : '0') : '-'}
+                    </span>
+                    {ans.bonus > 0 && (
+                      <p className="text-xs text-green-500">+{ans.bonus} bonus</p>
+                    )}
+                  </div>
                 </div>
                 <p className={`mt-1 pl-9 text-sm ${correct ? 'text-green-700' : 'text-red-600'}`}>"{ans.answer}"</p>
               </div>
@@ -467,8 +608,40 @@ const CompetitionInfoView = ({ competition, competitionRiddles }) => {
   );
 };
 
+const EmailVerificationScreen = ({ user, onResendEmail, resending }) => (
+  <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center p-4">
+    <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+      <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6">
+        <Mail size={40} className="text-yellow-600" />
+      </div>
+      <h2 className="text-2xl font-bold text-gray-800 mb-4">Verifica la tua email</h2>
+      <p className="text-gray-600 mb-6">
+        Abbiamo inviato un link di verifica a <strong>{user.email}</strong>. 
+        Clicca sul link per attivare il tuo account.
+      </p>
+      <button 
+        onClick={onResendEmail} 
+        disabled={resending}
+        className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold mb-4 disabled:bg-gray-400 flex items-center justify-center gap-2"
+      >
+        {resending ? <Loader2 size={20} className="animate-spin" /> : 'Invia di nuovo'}
+      </button>
+      <button 
+        onClick={() => signOut(auth)}
+        className="w-full bg-gray-100 text-gray-700 py-3 rounded-xl font-semibold"
+      >
+        Esci e riprova
+      </button>
+      <p className="text-xs text-gray-400 mt-4">
+        Dopo aver verificato, ricarica questa pagina
+      </p>
+    </div>
+  </div>
+);
+
 const App = () => {
   const savedState = useRef(loadNavState());
+  const backPressTime = useRef(0);
   
   const [user, setUser] = useState(null);
   const [userData, setUserData] = useState(null);
@@ -498,11 +671,71 @@ const App = () => {
   const [inAppNotifications, setInAppNotifications] = useState([]);
   const [dismissedNotifications, setDismissedNotifications] = useState([]);
   const [floatingNotification, setFloatingNotification] = useState(null);
+  const [showBackToast, setShowBackToast] = useState(false);
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [updatingUsername, setUpdatingUsername] = useState(false);
 
   const showMsg = useCallback((msg, dur = 3000) => {
     setMessage(msg);
     if (dur > 0) setTimeout(() => setMessage(''), dur);
   }, []);
+
+  // Gestione tasto indietro Android
+  useEffect(() => {
+    const handleBackButton = (e) => {
+      // Se siamo in una vista dettaglio, torna indietro
+      if (viewingRiddle) {
+        e.preventDefault();
+        setViewingRiddle(null);
+        return;
+      }
+      
+      if (selectedCompetition) {
+        e.preventDefault();
+        setSelectedCompetition(null);
+        setCompetitionTab('quiz');
+        return;
+      }
+      
+      if (activeTab !== 'home') {
+        e.preventDefault();
+        setActiveTab('home');
+        return;
+      }
+      
+      // Doppio tap per uscire
+      const now = Date.now();
+      if (now - backPressTime.current < 2000) {
+        // Lascia uscire
+        return;
+      }
+      
+      e.preventDefault();
+      backPressTime.current = now;
+      setShowBackToast(true);
+      setTimeout(() => setShowBackToast(false), 2000);
+    };
+
+    window.addEventListener('popstate', handleBackButton);
+    
+    // Aggiungi stato iniziale alla history
+    if (window.history.state === null) {
+      window.history.pushState({ page: 'app' }, '');
+    }
+    
+    return () => window.removeEventListener('popstate', handleBackButton);
+  }, [viewingRiddle, selectedCompetition, activeTab]);
+
+  // Push state quando cambia la navigazione
+  useEffect(() => {
+    if (user && !loading) {
+      window.history.pushState({ 
+        activeTab, 
+        selectedCompetition: selectedCompetition?.id,
+        viewingRiddle: viewingRiddle?.id 
+      }, '');
+    }
+  }, [activeTab, selectedCompetition, viewingRiddle, user, loading]);
 
   useEffect(() => {
     if (user && initialStateRestored) {
@@ -550,7 +783,7 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (user && announcements.length > 0 && !showPopup) {
+    if (user && user.emailVerified && announcements.length > 0 && !showPopup) {
       const shown = JSON.parse(sessionStorage.getItem('shownAnnouncements') || '[]');
       const unread = announcements.find(a => !readAnnouncements.includes(a.id) && !shown.includes(a.id));
       if (unread) {
@@ -640,7 +873,7 @@ const App = () => {
         list.sort((a, b) => {
           const dateA = a.dataInizio?.toDate ? a.dataInizio.toDate() : new Date(a.dataInizio);
           const dateB = b.dataInizio?.toDate ? b.dataInizio.toDate() : new Date(b.dataInizio);
-          return dateA - dateB; // Ordine cronologico (prima i più vecchi)
+          return dateA - dateB;
         });
         
         setRiddles(list);
@@ -787,6 +1020,19 @@ const App = () => {
     setFloatingNotification(null);
   };
 
+  const handleResendVerificationEmail = async () => {
+    if (!user || resendingEmail) return;
+    setResendingEmail(true);
+    try {
+      await sendEmailVerification(user);
+      showMsg('✅ Email inviata!');
+    } catch (e) {
+      showMsg('Errore: riprova tra qualche minuto');
+    } finally {
+      setResendingEmail(false);
+    }
+  };
+
   const handleRegister = async () => {
     if (authLoading) return;
     if (username.trim().length < 3) { showMsg('Nickname: min 3 caratteri'); return; }
@@ -796,14 +1042,19 @@ const App = () => {
     setAuthLoading(true);
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
+      
+      // Invia email di verifica
+      await sendEmailVerification(cred.user);
+      
       await setDoc(doc(db, 'users', cred.user.uid), {
         username: username.trim(),
         email,
         readAnnouncements: [],
         dismissedNotifications: [],
+        usernameChangedAt: null,
         createdAt: serverTimestamp()
       });
-      showMsg('✅ Registrazione completata!');
+      showMsg('✅ Registrazione completata! Controlla la tua email.');
     } catch (e) {
       showMsg(e.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore');
     } finally {
@@ -829,6 +1080,47 @@ const App = () => {
     setSelectedCompetition(null);
     setViewingRiddle(null);
     setActiveTab('home');
+  };
+
+  const handleUpdateUsername = async (newUsername) => {
+    if (!user || !userData || updatingUsername) return false;
+    
+    setUpdatingUsername(true);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        username: newUsername,
+        usernameChangedAt: serverTimestamp()
+      });
+      
+      // Aggiorna anche tutti i punteggi nelle competizioni
+      const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', user.uid)));
+      for (const scoreDoc of scoresSnap.docs) {
+        await updateDoc(scoreDoc.ref, { username: newUsername });
+      }
+      
+      setUserData(prev => ({ ...prev, username: newUsername, usernameChangedAt: Timestamp.now() }));
+      showMsg('✅ Username aggiornato!');
+      return true;
+    } catch (e) {
+      showMsg('Errore: ' + e.message);
+      return false;
+    } finally {
+      setUpdatingUsername(false);
+    }
+  };
+
+  const canChangeUsername = () => {
+    if (!userData?.usernameChangedAt) return true;
+    const lastChange = userData.usernameChangedAt.toDate ? userData.usernameChangedAt.toDate() : new Date(userData.usernameChangedAt);
+    const daysSinceChange = (Date.now() - lastChange.getTime()) / (1000 * 60 * 60 * 24);
+    return daysSinceChange >= 30;
+  };
+
+  const daysUntilUsernameChange = () => {
+    if (!userData?.usernameChangedAt) return 0;
+    const lastChange = userData.usernameChangedAt.toDate ? userData.usernameChangedAt.toDate() : new Date(userData.usernameChangedAt);
+    const daysSinceChange = (Date.now() - lastChange.getTime()) / (1000 * 60 * 60 * 24);
+    return Math.max(0, Math.ceil(30 - daysSinceChange));
   };
 
   const handleJoinCompetition = async (compId) => {
@@ -857,7 +1149,7 @@ const App = () => {
     if (!user || userAnswers[riddleId]) return;
     
     const answerData = {
-      userId: user.uid,
+      oderId: user.uid,
       riddleId,
       answer,
       time: serverTimestamp(),
@@ -921,7 +1213,6 @@ const App = () => {
 
   const getRiddlesForCompetition = (compId) => allRiddles.filter(r => r.competitionId === compId);
 
-  // Helper per verificare se una gara è attiva (basata sui suoi riddles)
   const isCompetitionActive = (comp) => {
     const compRiddles = getRiddlesForCompetition(comp.id);
     const now = new Date();
@@ -949,10 +1240,16 @@ const App = () => {
     );
   }
 
+  // Schermata verifica email
+  if (user && !user.emailVerified) {
+    return <EmailVerificationScreen user={user} onResendEmail={handleResendVerificationEmail} resending={resendingEmail} />;
+  }
+
   if (viewingRiddle) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 p-4 pb-24">
         <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
+        <BackToast show={showBackToast} />
         <div className="max-w-lg mx-auto">
           <RiddleAnswersView
             riddle={viewingRiddle}
@@ -970,7 +1267,6 @@ const App = () => {
     const isJoined = userCompetitions.includes(selectedCompetition.id);
     const now = new Date();
     
-    // Dividi i riddles in categorie
     const scheduledRiddles = riddles.filter(r => {
       const s = r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio);
       return now < s;
@@ -994,6 +1290,7 @@ const App = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
         <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
+        <BackToast show={showBackToast} />
         
         <div className="bg-white rounded-b-3xl shadow-lg p-4 mb-4">
           <div className="max-w-lg mx-auto flex items-center gap-3">
@@ -1110,19 +1407,14 @@ const App = () => {
   }
 
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
-  
-  // Solo gare ATTIVE a cui l'utente partecipa (per la home)
-  const activeJoinedComps = competitions.filter(c => 
-    userCompetitions.includes(c.id) && isCompetitionActive(c)
-  );
-  
-  // Tutte le gare a cui l'utente partecipa (per la sezione gare)
+  const activeJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && isCompetitionActive(c));
   const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id));
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
       <FloatingNotification notification={floatingNotification} onDismiss={handleDismissNotification} onNavigate={handleNotificationNavigate} />
       <AnnouncementPopup announcement={showPopup} onClose={() => setShowPopup(null)} onMarkRead={handleMarkAnnouncementRead} />
+      <BackToast show={showBackToast} />
 
       <div className="bg-white rounded-b-3xl shadow-lg p-6 mb-6">
         <div className="max-w-lg mx-auto">
@@ -1322,6 +1614,17 @@ const App = () => {
                   ))
                 )}
               </div>
+            )}
+
+            {activeTab === 'profile' && (
+              <ProfileView 
+                userData={userData} 
+                user={user} 
+                onUpdateUsername={handleUpdateUsername}
+                updating={updatingUsername}
+                canChangeUsername={canChangeUsername()}
+                daysUntilChange={daysUntilUsernameChange()}
+              />
             )}
           </>
         )}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings, Plus, Trash2, LogOut, Bold, Italic, List, Eye, Check, Loader2, ArrowLeft, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid, FileText, Edit3, RefreshCw } from 'lucide-react';
+import { Settings, Plus, Trash2, LogOut, Bold, Italic, List, Eye, Check, Loader2, ArrowLeft, Lock, Trophy, Flag, Users, Megaphone, Home, LayoutGrid, FileText, Edit3, RefreshCw, Gift, Save } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -35,7 +35,16 @@ const compareAnswers = (a, b) => {
   return a.trim() === b.trim();
 };
 
-// Funzione CORRETTA per ricalcolare i punti di un indovinello
+// Calcola bonus in base al numero di risposte corrette
+const getBonusPoints = (correctCount, riddle) => {
+  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  if (correctCount === 1) return bonus.uno || 0;
+  if (correctCount >= 2 && correctCount <= 5) return bonus.finoCinque || 0;
+  if (correctCount >= 6 && correctCount <= 10) return bonus.seiDieci || 0;
+  return 0;
+};
+
+// Funzione per ricalcolare i punti di un indovinello
 const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
   const log = onLog || console.log;
   
@@ -43,7 +52,6 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
     log(`\n📝 Ricalcolo: "${riddle.titolo}"`);
     log(`   Risposta corretta: "${riddle.risposta}"`);
     
-    // 1. Recupera tutte le risposte per questo indovinello
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
     const answers = [];
     answersSnap.forEach(d => answers.push({ id: d.id, ref: d.ref, ...d.data() }));
@@ -52,18 +60,16 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
     
     if (answers.length === 0) {
       log(`   ⚠️ Nessuna risposta trovata`);
-      await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true });
+      await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, correctCount: 0 });
       return { success: true, processed: 0 };
     }
     
-    // 2. Ordina per timestamp (più vecchio prima)
     answers.sort((a, b) => {
       const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
       const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
       return timeA - timeB;
     });
     
-    // 3. Calcola i punti per posizione
     const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
     const getPoints = (pos) => {
       if (pos === 0) return punti.primo;
@@ -72,23 +78,30 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
       return punti.altri;
     };
     
-    // 4. Prima azzera i punti di questo riddle da tutti gli score della competizione
+    // Prima conta le risposte corrette per calcolare il bonus
+    const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta));
+    const correctCount = correctAnswers.length;
+    const bonus = getBonusPoints(correctCount, riddle);
+    
+    log(`   Risposte corrette: ${correctCount}, Bonus applicato: +${bonus}`);
+    
+    // Rimuovi vecchi punti
     if (riddle.competitionId) {
-      // Recupera tutti i punteggi precedenti di questo riddle
       const oldAnswersWithPoints = answers.filter(a => a.points > 0);
       for (const oldAns of oldAnswersWithPoints) {
-        const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oldAns.userId}`);
+        const oderId = oldAns.oderId || oldAns.oderId;
+        const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`);
         const scoreDoc = await getDoc(scoreRef);
         if (scoreDoc.exists()) {
           const currentPoints = scoreDoc.data().points || 0;
           const newPoints = Math.max(0, currentPoints - oldAns.points);
           await updateDoc(scoreRef, { points: newPoints });
-          log(`   🔄 Rimossi ${oldAns.points} punti da utente ${oldAns.userId} (${currentPoints} → ${newPoints})`);
+          log(`   🔄 Rimossi ${oldAns.points} punti da utente ${oderId}`);
         }
       }
     }
     
-    // 5. Assegna i nuovi punti
+    // Assegna nuovi punti
     let correctPosition = 0;
     const updates = [];
     
@@ -96,10 +109,12 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
       const ans = answers[i];
       const isCorrect = compareAnswers(ans.answer, riddle.risposta);
       let points = 0;
+      let ansBonus = 0;
       
       if (isCorrect) {
-        points = getPoints(correctPosition);
-        log(`   ✅ #${i + 1} "${ans.answer}" - CORRETTO (pos ${correctPosition + 1}) → ${points} punti`);
+        ansBonus = bonus;
+        points = getPoints(correctPosition) + ansBonus;
+        log(`   ✅ #${i + 1} "${ans.answer}" - CORRETTO (pos ${correctPosition + 1}) → ${points} punti (base + ${ansBonus} bonus)`);
         correctPosition++;
       } else {
         log(`   ❌ #${i + 1} "${ans.answer}" - ERRATO → 0 punti`);
@@ -107,18 +122,17 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
       
       updates.push({
         ref: ans.ref,
-        oderId: ans.userId,
+        oderId: ans.oderId || ans.oderId,
         points,
-        isCorrect
+        isCorrect,
+        bonus: ansBonus
       });
     }
     
-    // 6. Esegui tutti gli aggiornamenti delle risposte
     for (const upd of updates) {
-      await updateDoc(upd.ref, { points: upd.points, isCorrect: upd.isCorrect });
+      await updateDoc(upd.ref, { points: upd.points, isCorrect: upd.isCorrect, bonus: upd.bonus });
     }
     
-    // 7. Aggiorna i punteggi della competizione
     if (riddle.competitionId) {
       for (const upd of updates) {
         if (upd.points > 0) {
@@ -133,8 +147,7 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
       }
     }
     
-    // 8. Marca il riddle come processato
-    await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp() });
+    await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, processedAt: serverTimestamp(), correctCount });
     
     log(`   ✅ Completato! ${correctPosition} risposte corrette`);
     return { success: true, processed: answers.length, correct: correctPosition };
@@ -143,6 +156,31 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
     log(`   ❌ ERRORE: ${e.message}`);
     console.error('Errore ricalcolo:', e);
     return { success: false, error: e.message };
+  }
+};
+
+// Salvataggio stato navigazione admin
+const saveAdminNavState = (state) => {
+  try {
+    sessionStorage.setItem('haikuAdminNavState', JSON.stringify({
+      ...state,
+      timestamp: Date.now()
+    }));
+  } catch (e) {}
+};
+
+const loadAdminNavState = () => {
+  try {
+    const saved = sessionStorage.getItem('haikuAdminNavState');
+    if (!saved) return null;
+    const state = JSON.parse(saved);
+    if (Date.now() - state.timestamp > 3600000) {
+      sessionStorage.removeItem('haikuAdminNavState');
+      return null;
+    }
+    return state;
+  } catch (e) {
+    return null;
   }
 };
 
@@ -183,6 +221,47 @@ const RichTextEditor = ({ editorRef, placeholder, initialContent }) => {
   );
 };
 
+const BonusPointsEditor = ({ bonus, onChange, label }) => (
+  <div className="p-3 bg-green-50 rounded-xl border border-green-200">
+    <p className="text-sm font-medium text-green-700 mb-2 flex items-center gap-1">
+      <Gift size={16} /> {label || 'Bonus pochi rispondenti'}
+    </p>
+    <div className="grid grid-cols-3 gap-2">
+      <div>
+        <label className="text-xs text-green-600">Solo 1</label>
+        <input 
+          type="number" 
+          min="0" 
+          value={bonus.uno} 
+          onChange={e => onChange({ ...bonus, uno: parseInt(e.target.value) || 0 })} 
+          className="w-full px-2 py-2 border rounded text-center text-sm" 
+        />
+      </div>
+      <div>
+        <label className="text-xs text-green-600">Max 5</label>
+        <input 
+          type="number" 
+          min="0" 
+          value={bonus.finoCinque} 
+          onChange={e => onChange({ ...bonus, finoCinque: parseInt(e.target.value) || 0 })} 
+          className="w-full px-2 py-2 border rounded text-center text-sm" 
+        />
+      </div>
+      <div>
+        <label className="text-xs text-green-600">6-10</label>
+        <input 
+          type="number" 
+          min="0" 
+          value={bonus.seiDieci} 
+          onChange={e => onChange({ ...bonus, seiDieci: parseInt(e.target.value) || 0 })} 
+          className="w-full px-2 py-2 border rounded text-center text-sm" 
+        />
+      </div>
+    </div>
+    <p className="text-xs text-green-600 mt-2">Più di 10 risposte corrette = nessun bonus</p>
+  </div>
+);
+
 const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, recalculating }) => {
   const sorted = [...answers].sort((a, b) => {
     const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
@@ -191,6 +270,8 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
   });
   const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
+  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
   
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -203,7 +284,7 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
           className="flex items-center gap-2 px-4 py-2 bg-orange-100 text-orange-700 rounded-xl hover:bg-orange-200 disabled:opacity-50"
         >
           <RefreshCw size={16} className={recalculating ? 'animate-spin' : ''} />
-          {recalculating ? 'Ricalcolo...' : 'Ricalcola punti'}
+          {recalculating ? 'Ricalcolo...' : 'Ricalcola'}
         </button>
       </div>
       <div className="mb-4 p-4 bg-gray-50 rounded-xl border">
@@ -212,8 +293,14 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
       </div>
       <div className="mb-4 p-4 bg-purple-50 rounded-xl">
         <p className="text-sm font-semibold text-purple-700">Risposta: {riddle.risposta}</p>
-        <p className="text-xs text-gray-500 mt-1">Punti: 1° {punti.primo} | 2° {punti.secondo} | 3° {punti.terzo} | Altri {punti.altri}</p>
+        <p className="text-xs text-gray-500 mt-1">Punti base: 1° {punti.primo} | 2° {punti.secondo} | 3° {punti.terzo} | Altri {punti.altri}</p>
+        {hasBonus && (
+          <p className="text-xs text-green-600 mt-1">Bonus: Solo 1 +{bonus.uno} | Max 5 +{bonus.finoCinque} | 6-10 +{bonus.seiDieci}</p>
+        )}
         <p className="text-xs text-gray-500 mt-1">Periodo: {formatDateTime(riddle.dataInizio)} → {formatDateTime(riddle.dataFine)}</p>
+        {riddle.correctCount !== undefined && (
+          <p className="text-xs text-blue-600 mt-1">Risposte corrette: {riddle.correctCount}</p>
+        )}
         <p className="text-xs mt-2">
           Stato: {riddle.pointsAssigned ? 
             <span className="text-green-600 font-medium">✅ Punti assegnati</span> : 
@@ -232,7 +319,7 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
                   <div className="flex items-center gap-3">
                     <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${correct ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>{i + 1}</span>
                     <div>
-                      <span className="font-medium">{userMap[ans.userId] || ans.userId}</span>
+                      <span className="font-medium">{userMap[ans.oderId] || userMap[ans.oderId] || ans.oderId || 'Utente'}</span>
                       <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
                       <p className={`text-sm ${correct ? 'text-green-700 font-medium' : 'text-red-600'}`}>"{ans.answer}"</p>
                     </div>
@@ -241,9 +328,9 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
                     <span className={`font-bold text-lg ${ans.points > 0 ? 'text-green-600' : 'text-gray-400'}`}>
                       {ans.points > 0 ? `+${ans.points}` : '0'}
                     </span>
-                    <p className="text-xs text-gray-400">
-                      {ans.isCorrect === true ? '✓' : ans.isCorrect === false ? '✗' : '?'}
-                    </p>
+                    {ans.bonus > 0 && (
+                      <p className="text-xs text-green-500">incl. +{ans.bonus} bonus</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -255,7 +342,41 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
   );
 };
 
+const UserEditModal = ({ user, onClose, onSave, saving }) => {
+  const [newUsername, setNewUsername] = useState(user?.username || '');
+  
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+        <h3 className="text-lg font-bold mb-4">Modifica utente</h3>
+        <div className="mb-4">
+          <label className="text-sm text-gray-600 mb-1 block">Username</label>
+          <input 
+            type="text" 
+            value={newUsername} 
+            onChange={e => setNewUsername(e.target.value)}
+            className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl"
+          />
+        </div>
+        <p className="text-xs text-gray-500 mb-4">Email: {user?.email}</p>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 bg-gray-200 py-3 rounded-xl font-semibold">Annulla</button>
+          <button 
+            onClick={() => onSave(user.id, newUsername)} 
+            disabled={saving || newUsername.trim().length < 3}
+            className="flex-1 bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2"
+          >
+            {saving ? <Loader2 size={18} className="animate-spin" /> : <><Save size={18} /> Salva</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Admin = () => {
+  const savedState = useRef(loadAdminNavState());
+  
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -268,15 +389,18 @@ const Admin = () => {
   const [users, setUsers] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [competitionScores, setCompetitionScores] = useState([]);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState(savedState.current?.activeTab || 'dashboard');
   const [selectedCompetition, setSelectedCompetition] = useState(null);
   const [editingCompetition, setEditingCompetition] = useState(null);
   const [editingRiddle, setEditingRiddle] = useState(null);
-  const [newCompetition, setNewCompetition] = useState({ nome: '', descrizione: '', dataInizio: '', dataFine: '' });
-  const [newRiddle, setNewRiddle] = useState({ titolo: '', risposta: '', competitionId: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00', puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1 });
+  const [editingUser, setEditingUser] = useState(null);
+  const [newCompetition, setNewCompetition] = useState({ nome: '', descrizione: '', dataInizio: '', dataFine: '', bonusPunti: { uno: 0, finoCinque: 0, seiDieci: 0 } });
+  const [newRiddle, setNewRiddle] = useState({ titolo: '', risposta: '', competitionId: '', dataInizio: '', oraInizio: '09:00', dataFine: '', oraFine: '18:00', puntoPrimo: 3, puntoSecondo: 1, puntoTerzo: 1, puntoAltri: 1, bonusPunti: { uno: 0, finoCinque: 0, seiDieci: 0 } });
   const [newAnnouncement, setNewAnnouncement] = useState({ titolo: '' });
   const [showPuntiCustom, setShowPuntiCustom] = useState(false);
+  const [showBonusCustom, setShowBonusCustom] = useState(false);
   const [showEditPuntiCustom, setShowEditPuntiCustom] = useState(false);
+  const [showEditBonusCustom, setShowEditBonusCustom] = useState(false);
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
   const [submitting, setSubmitting] = useState(false);
@@ -290,6 +414,26 @@ const Admin = () => {
   const regolamentoEditorRef = useRef(null);
 
   const showMsg = (msg, dur = 3000) => { setMessage(msg); if (dur > 0) setTimeout(() => setMessage(''), dur); };
+
+  // Salva stato navigazione
+  useEffect(() => {
+    if (isAdmin) {
+      saveAdminNavState({
+        activeTab,
+        selectedCompetitionId: selectedCompetition?.id || null
+      });
+    }
+  }, [activeTab, selectedCompetition, isAdmin]);
+
+  // Ripristina stato navigazione
+  useEffect(() => {
+    if (isAdmin && competitions.length > 0 && savedState.current?.selectedCompetitionId) {
+      const comp = competitions.find(c => c.id === savedState.current.selectedCompetitionId);
+      if (comp && !selectedCompetition) {
+        setSelectedCompetition(comp);
+      }
+    }
+  }, [isAdmin, competitions]);
 
   useEffect(() => { return onAuthStateChanged(auth, (u) => { if (u && ADMIN_EMAILS.includes(u.email)) { setUser(u); setIsAdmin(true); } else { setUser(null); setIsAdmin(false); } setLoading(false); }); }, []);
   useEffect(() => { if (!isAdmin) return; return onSnapshot(query(collection(db, 'competitions'), orderBy('dataInizio', 'desc')), (snap) => { setCompetitions(snap.docs.map(d => ({ id: d.id, ...d.data() }))); }); }, [isAdmin]);
@@ -315,10 +459,8 @@ const Admin = () => {
       
       if (result.success) {
         showMsg(`✅ Punti ricalcolati! ${result.correct || 0} risposte corrette su ${result.processed || 0}`);
-        // Ricarica le risposte
         const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddle.id)));
         setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        // Aggiorna il riddle nella lista
         const riddleDoc = await getDoc(doc(db, 'riddles', riddle.id));
         if (riddleDoc.exists()) {
           setViewingRiddle({ id: riddleDoc.id, ...riddleDoc.data() });
@@ -338,8 +480,17 @@ const Admin = () => {
     const regolamento = regolamentoEditorRef.current?.innerHTML || '';
     setSubmitting(true);
     try {
-      await setDoc(doc(collection(db, 'competitions')), { nome: newCompetition.nome, descrizione: newCompetition.descrizione || '', regolamento, dataInizio: Timestamp.fromDate(new Date(newCompetition.dataInizio)), dataFine: Timestamp.fromDate(new Date(newCompetition.dataFine)), participantsCount: 0, createdAt: serverTimestamp() });
-      setNewCompetition({ nome: '', descrizione: '', dataInizio: '', dataFine: '' });
+      await setDoc(doc(collection(db, 'competitions')), { 
+        nome: newCompetition.nome, 
+        descrizione: newCompetition.descrizione || '', 
+        regolamento, 
+        dataInizio: Timestamp.fromDate(new Date(newCompetition.dataInizio)), 
+        dataFine: Timestamp.fromDate(new Date(newCompetition.dataFine)), 
+        bonusPunti: newCompetition.bonusPunti,
+        participantsCount: 0, 
+        createdAt: serverTimestamp() 
+      });
+      setNewCompetition({ nome: '', descrizione: '', dataInizio: '', dataFine: '', bonusPunti: { uno: 0, finoCinque: 0, seiDieci: 0 } });
       if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = '';
       showMsg('✅ Competizione creata!');
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); }
@@ -350,7 +501,12 @@ const Admin = () => {
     const regolamento = regolamentoEditorRef.current?.innerHTML || '';
     setSubmitting(true);
     try {
-      await updateDoc(doc(db, 'competitions', editingCompetition.id), { nome: editingCompetition.nome, descrizione: editingCompetition.descrizione || '', regolamento });
+      await updateDoc(doc(db, 'competitions', editingCompetition.id), { 
+        nome: editingCompetition.nome, 
+        descrizione: editingCompetition.descrizione || '', 
+        regolamento,
+        bonusPunti: editingCompetition.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 }
+      });
       setEditingCompetition(null);
       showMsg('✅ Competizione aggiornata!');
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); }
@@ -363,8 +519,31 @@ const Admin = () => {
     try {
       const start = new Date(`${newRiddle.dataInizio}T${newRiddle.oraInizio}:00`);
       const end = new Date(`${newRiddle.dataFine}T${newRiddle.oraFine}:00`);
-      await setDoc(doc(collection(db, 'riddles')), { titolo: newRiddle.titolo, domanda, risposta: newRiddle.risposta.trim(), competitionId: newRiddle.competitionId, dataInizio: Timestamp.fromDate(start), dataFine: Timestamp.fromDate(end), punti: { primo: parseInt(newRiddle.puntoPrimo) || 3, secondo: parseInt(newRiddle.puntoSecondo) || 1, terzo: parseInt(newRiddle.puntoTerzo) || 1, altri: parseInt(newRiddle.puntoAltri) || 1 }, pointsAssigned: false, createdAt: serverTimestamp() });
-      setNewRiddle({ ...newRiddle, titolo: '', risposta: '', dataInizio: '', dataFine: '' });
+      
+      // Prendi i bonus dalla gara se non specificati
+      const comp = competitions.find(c => c.id === newRiddle.competitionId);
+      const bonusPunti = (newRiddle.bonusPunti.uno > 0 || newRiddle.bonusPunti.finoCinque > 0 || newRiddle.bonusPunti.seiDieci > 0) 
+        ? newRiddle.bonusPunti 
+        : (comp?.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 });
+      
+      await setDoc(doc(collection(db, 'riddles')), { 
+        titolo: newRiddle.titolo, 
+        domanda, 
+        risposta: newRiddle.risposta.trim(), 
+        competitionId: newRiddle.competitionId, 
+        dataInizio: Timestamp.fromDate(start), 
+        dataFine: Timestamp.fromDate(end), 
+        punti: { 
+          primo: parseInt(newRiddle.puntoPrimo) || 3, 
+          secondo: parseInt(newRiddle.puntoSecondo) || 1, 
+          terzo: parseInt(newRiddle.puntoTerzo) || 1, 
+          altri: parseInt(newRiddle.puntoAltri) || 1 
+        }, 
+        bonusPunti,
+        pointsAssigned: false, 
+        createdAt: serverTimestamp() 
+      });
+      setNewRiddle({ ...newRiddle, titolo: '', risposta: '', dataInizio: '', dataFine: '', bonusPunti: { uno: 0, finoCinque: 0, seiDieci: 0 } });
       if (riddleEditorRef.current) riddleEditorRef.current.innerHTML = '';
       showMsg('✅ Indovinello creato!');
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); }
@@ -378,17 +557,45 @@ const Admin = () => {
     try {
       const start = new Date(`${editingRiddle.dataInizio}T${editingRiddle.oraInizio}:00`);
       const end = new Date(`${editingRiddle.dataFine}T${editingRiddle.oraFine}:00`);
-      await updateDoc(doc(db, 'riddles', editingRiddle.id), { titolo: editingRiddle.titolo, domanda, risposta: editingRiddle.risposta.trim(), competitionId: editingRiddle.competitionId, dataInizio: Timestamp.fromDate(start), dataFine: Timestamp.fromDate(end), punti: { primo: parseInt(editingRiddle.puntoPrimo) || 3, secondo: parseInt(editingRiddle.puntoSecondo) || 1, terzo: parseInt(editingRiddle.puntoTerzo) || 1, altri: parseInt(editingRiddle.puntoAltri) || 1 } });
+      await updateDoc(doc(db, 'riddles', editingRiddle.id), { 
+        titolo: editingRiddle.titolo, 
+        domanda, 
+        risposta: editingRiddle.risposta.trim(), 
+        competitionId: editingRiddle.competitionId, 
+        dataInizio: Timestamp.fromDate(start), 
+        dataFine: Timestamp.fromDate(end), 
+        punti: { 
+          primo: parseInt(editingRiddle.puntoPrimo) || 3, 
+          secondo: parseInt(editingRiddle.puntoSecondo) || 1, 
+          terzo: parseInt(editingRiddle.puntoTerzo) || 1, 
+          altri: parseInt(editingRiddle.puntoAltri) || 1 
+        },
+        bonusPunti: editingRiddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 }
+      });
       setEditingRiddle(null);
       setShowEditPuntiCustom(false);
+      setShowEditBonusCustom(false);
       showMsg('✅ Indovinello aggiornato!');
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); }
   };
 
   const startEditRiddle = (riddle) => {
     const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
-    setEditingRiddle({ ...riddle, dataInizio: formatDateForInput(riddle.dataInizio), oraInizio: formatTimeForInput(riddle.dataInizio), dataFine: formatDateForInput(riddle.dataFine), oraFine: formatTimeForInput(riddle.dataFine), puntoPrimo: punti.primo, puntoSecondo: punti.secondo, puntoTerzo: punti.terzo, puntoAltri: punti.altri });
+    const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+    setEditingRiddle({ 
+      ...riddle, 
+      dataInizio: formatDateForInput(riddle.dataInizio), 
+      oraInizio: formatTimeForInput(riddle.dataInizio), 
+      dataFine: formatDateForInput(riddle.dataFine), 
+      oraFine: formatTimeForInput(riddle.dataFine), 
+      puntoPrimo: punti.primo, 
+      puntoSecondo: punti.secondo, 
+      puntoTerzo: punti.terzo, 
+      puntoAltri: punti.altri,
+      bonusPunti: bonus
+    });
     setShowEditPuntiCustom(false);
+    setShowEditBonusCustom(false);
   };
 
   const handleAddAnnouncement = async () => {
@@ -401,6 +608,27 @@ const Admin = () => {
       if (announcementEditorRef.current) announcementEditorRef.current.innerHTML = '';
       showMsg('✅ Comunicazione inviata!');
     } catch (e) { showMsg('Errore: ' + e.message); } finally { setSubmitting(false); }
+  };
+
+  const handleUpdateUser = async (userId, newUsername) => {
+    if (!userId || newUsername.trim().length < 3) return;
+    setSubmitting(true);
+    try {
+      await updateDoc(doc(db, 'users', oderId), { username: newUsername.trim() });
+      
+      // Aggiorna anche nei punteggi delle competizioni
+      const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', oderId)));
+      for (const scoreDoc of scoresSnap.docs) {
+        await updateDoc(scoreDoc.ref, { username: newUsername.trim() });
+      }
+      
+      setEditingUser(null);
+      showMsg('✅ Utente aggiornato!');
+    } catch (e) { 
+      showMsg('Errore: ' + e.message); 
+    } finally { 
+      setSubmitting(false); 
+    }
   };
 
   const handleDelete = async () => {
@@ -417,10 +645,10 @@ const Admin = () => {
       } else if (confirmDelete.type === 'riddle') {
         const riddle = riddles.find(r => r.id === confirmDelete.id);
         const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', confirmDelete.id)));
-        for (const d of snap.docs) { const ans = d.data(); if (ans.points > 0 && riddle?.competitionId) { const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${ans.userId}`); const scoreDoc = await getDoc(scoreRef); if (scoreDoc.exists()) await updateDoc(scoreRef, { points: Math.max(0, (scoreDoc.data().points || 0) - ans.points) }); } await deleteDoc(d.ref); }
+        for (const d of snap.docs) { const ans = d.data(); if (ans.points > 0 && riddle?.competitionId) { const oderId = ans.oderId || ans.oderId; const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`); const scoreDoc = await getDoc(scoreRef); if (scoreDoc.exists()) await updateDoc(scoreRef, { points: Math.max(0, (scoreDoc.data().points || 0) - ans.points) }); } await deleteDoc(d.ref); }
         await deleteDoc(doc(db, 'riddles', confirmDelete.id));
       } else if (confirmDelete.type === 'user') {
-        const answersSnap = await getDocs(query(collection(db, 'answers'), where('userId', '==', confirmDelete.id)));
+        const answersSnap = await getDocs(query(collection(db, 'answers'), where('oderId', '==', confirmDelete.id)));
         for (const d of answersSnap.docs) await deleteDoc(d.ref);
         const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', confirmDelete.id)));
         for (const d of scoresSnap.docs) await deleteDoc(d.ref);
@@ -437,7 +665,13 @@ const Admin = () => {
     setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() }))); 
   };
   
-  const startEditCompetition = (comp) => { setEditingCompetition({ ...comp }); setTimeout(() => { if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = comp.regolamento || ''; }, 100); };
+  const startEditCompetition = (comp) => { 
+    setEditingCompetition({ 
+      ...comp,
+      bonusPunti: comp.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 }
+    }); 
+    setTimeout(() => { if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = comp.regolamento || ''; }, 100); 
+  };
 
   if (loading) return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><Loader2 className="animate-spin text-purple-600" size={40} /></div>;
 
@@ -477,15 +711,19 @@ const Admin = () => {
     <div className="min-h-screen bg-gray-100 p-4 pb-24">
       <div className="max-w-4xl mx-auto">
         <div className="bg-white rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-6"><button onClick={() => { setEditingRiddle(null); setShowEditPuntiCustom(false); }} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button><h2 className="text-xl font-bold text-gray-800">Modifica Indovinello</h2>{editingRiddle.pointsAssigned && <span className="ml-auto text-xs bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">⚠️ Quiz già concluso</span>}</div>
+          <div className="flex items-center gap-3 mb-6"><button onClick={() => { setEditingRiddle(null); setShowEditPuntiCustom(false); setShowEditBonusCustom(false); }} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button><h2 className="text-xl font-bold text-gray-800">Modifica Indovinello</h2>{editingRiddle.pointsAssigned && <span className="ml-auto text-xs bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">⚠️ Quiz già concluso</span>}</div>
           <select value={editingRiddle.competitionId} onChange={e => setEditingRiddle(p => ({ ...p, competitionId: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3"><option value="">-- Seleziona gara --</option>{competitions.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}</select>
           <input type="text" placeholder="Titolo *" value={editingRiddle.titolo} onChange={e => setEditingRiddle(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
           <div className="mb-3"><label className="text-sm text-gray-600 mb-2 block">Domanda *</label><RichTextEditor editorRef={editRiddleEditorRef} placeholder="Scrivi la domanda..." initialContent={editingRiddle.domanda} /></div>
           <input type="text" placeholder="Risposta (case-sensitive) *" value={editingRiddle.risposta} onChange={e => setEditingRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
           <div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data inizio</label><input type="date" value={editingRiddle.dataInizio} onChange={e => setEditingRiddle(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora inizio</label><input type="time" value={editingRiddle.oraInizio} onChange={e => setEditingRiddle(p => ({ ...p, oraInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div>
           <div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data fine</label><input type="date" value={editingRiddle.dataFine} onChange={e => setEditingRiddle(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora fine</label><input type="time" value={editingRiddle.oraFine} onChange={e => setEditingRiddle(p => ({ ...p, oraFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div>
-          <button type="button" onClick={() => setShowEditPuntiCustom(!showEditPuntiCustom)} className="text-sm text-purple-600 mb-3"><Trophy size={14} className="inline" /> Punteggi</button>
+          <div className="flex gap-3 mb-3">
+            <button type="button" onClick={() => setShowEditPuntiCustom(!showEditPuntiCustom)} className="text-sm text-purple-600"><Trophy size={14} className="inline" /> Punteggi</button>
+            <button type="button" onClick={() => setShowEditBonusCustom(!showEditBonusCustom)} className="text-sm text-green-600"><Gift size={14} className="inline" /> Bonus</button>
+          </div>
           {showEditPuntiCustom && <div className="mb-3 p-3 bg-purple-50 rounded-xl grid grid-cols-4 gap-2"><div><label className="text-xs">1°</label><input type="number" min="0" value={editingRiddle.puntoPrimo} onChange={e => setEditingRiddle(p => ({ ...p, puntoPrimo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">2°</label><input type="number" min="0" value={editingRiddle.puntoSecondo} onChange={e => setEditingRiddle(p => ({ ...p, puntoSecondo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">3°</label><input type="number" min="0" value={editingRiddle.puntoTerzo} onChange={e => setEditingRiddle(p => ({ ...p, puntoTerzo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">Altri</label><input type="number" min="0" value={editingRiddle.puntoAltri} onChange={e => setEditingRiddle(p => ({ ...p, puntoAltri: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div></div>}
+          {showEditBonusCustom && <div className="mb-3"><BonusPointsEditor bonus={editingRiddle.bonusPunti} onChange={b => setEditingRiddle(p => ({ ...p, bonusPunti: b }))} /></div>}
           <button onClick={handleUpdateRiddle} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Salva modifiche'}</button>
         </div>
       </div>
@@ -500,6 +738,13 @@ const Admin = () => {
           <input type="text" placeholder="Nome *" value={editingCompetition.nome} onChange={e => setEditingCompetition(p => ({ ...p, nome: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" />
           <textarea placeholder="Descrizione breve" value={editingCompetition.descrizione || ''} onChange={e => setEditingCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" />
           <div className="mb-4"><label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento</label><RichTextEditor editorRef={regolamentoEditorRef} placeholder="Regolamento..." initialContent={editingCompetition.regolamento} /></div>
+          <div className="mb-4">
+            <BonusPointsEditor 
+              bonus={editingCompetition.bonusPunti} 
+              onChange={b => setEditingCompetition(p => ({ ...p, bonusPunti: b }))} 
+              label="Bonus default per nuovi quiz"
+            />
+          </div>
           <button onClick={handleUpdateCompetition} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Salva modifiche'}</button>
         </div>
       </div>
@@ -525,14 +770,15 @@ const Admin = () => {
   return (
     <div className="min-h-screen bg-gray-100 pb-24">
       {confirmDelete && <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h3 className="text-lg font-bold mb-4">Conferma eliminazione</h3><p className="mb-4">Eliminare <strong>{confirmDelete.name}</strong>?</p><div className="flex gap-3"><button onClick={() => setConfirmDelete(null)} className="flex-1 bg-gray-200 py-3 rounded-xl">Annulla</button><button onClick={handleDelete} disabled={submitting} className="flex-1 bg-red-500 text-white py-3 rounded-xl flex items-center justify-center">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Elimina'}</button></div></div></div>}
+      {editingUser && <UserEditModal user={editingUser} onClose={() => setEditingUser(null)} onSave={handleUpdateUser} saving={submitting} />}
       <div className="bg-white p-4 shadow-sm mb-4"><div className="max-w-4xl mx-auto flex justify-between items-center"><h1 className="text-xl font-bold flex items-center gap-2"><Settings size={24} /> Admin</h1><button onClick={() => signOut(auth)} className="p-2 text-gray-500 hover:text-red-600"><LogOut size={22} /></button></div></div>
       {message && <div className={`mx-4 mb-4 p-4 rounded-xl text-center ${message.includes('✅') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{message}</div>}
       <div className="max-w-4xl mx-auto px-4">
         {activeTab === 'dashboard' && <div className="space-y-4"><div className="grid grid-cols-2 md:grid-cols-4 gap-4"><div className="bg-white rounded-2xl p-4 text-center"><Flag className="mx-auto text-purple-500 mb-2" size={28} /><p className="text-2xl font-bold">{competitions.length}</p><p className="text-sm text-gray-500">Gare</p></div><div className="bg-white rounded-2xl p-4 text-center"><LayoutGrid className="mx-auto text-blue-500 mb-2" size={28} /><p className="text-2xl font-bold">{riddles.length}</p><p className="text-sm text-gray-500">Quiz</p></div><div className="bg-white rounded-2xl p-4 text-center"><Users className="mx-auto text-green-500 mb-2" size={28} /><p className="text-2xl font-bold">{users.length}</p><p className="text-sm text-gray-500">Utenti</p></div><div className="bg-white rounded-2xl p-4 text-center"><Megaphone className="mx-auto text-orange-500 mb-2" size={28} /><p className="text-2xl font-bold">{announcements.length}</p><p className="text-sm text-gray-500">Avvisi</p></div></div>{activeComps.length > 0 && <div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Gare attive</h3>{activeComps.map(c => <div key={c.id} onClick={() => setSelectedCompetition(c)} className="p-4 bg-green-50 rounded-xl border border-green-200 cursor-pointer mb-2"><h4 className="font-semibold text-green-800">{c.nome}</h4><p className="text-sm text-green-600">{c.participantsCount || 0} partecipanti</p></div>)}</div>}</div>}
-        {activeTab === 'competitions' && <div className="space-y-4"><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuova Gara</h3><input type="text" placeholder="Nome *" value={newCompetition.nome} onChange={e => setNewCompetition(p => ({ ...p, nome: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><textarea placeholder="Descrizione breve" value={newCompetition.descrizione} onChange={e => setNewCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" /><div className="mb-4"><label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento</label><RichTextEditor editorRef={regolamentoEditorRef} placeholder="Regolamento..." /></div><div className="grid grid-cols-2 gap-3 mb-4"><div><label className="text-sm text-gray-600">Inizio</label><input type="date" value={newCompetition.dataInizio} onChange={e => setNewCompetition(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Fine</label><input type="date" value={newCompetition.dataFine} onChange={e => setNewCompetition(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><button onClick={handleAddCompetition} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Crea'}</button></div><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Tutte le gare ({competitions.length})</h3>{competitions.map(c => <div key={c.id} className="p-4 bg-gray-50 rounded-xl border flex justify-between items-center mb-2"><div className="cursor-pointer flex-1" onClick={() => setSelectedCompetition(c)}><h4 className="font-semibold text-purple-700">{c.nome}</h4><p className="text-sm text-gray-500">{formatDate(c.dataInizio)} - {formatDate(c.dataFine)}</p><p className="text-xs text-gray-400">{riddles.filter(r => r.competitionId === c.id).length} quiz • {c.participantsCount || 0} iscritti</p></div><div className="flex gap-2"><button onClick={() => startEditCompetition(c)} className="text-purple-600 p-2"><Edit3 size={18} /></button><button onClick={() => setConfirmDelete({ type: 'competition', id: c.id, name: c.nome })} className="text-red-500 p-2"><Trash2 size={18} /></button></div></div>)}</div></div>}
-        {activeTab === 'riddles' && <div className="space-y-4"><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuovo Quiz</h3><select value={newRiddle.competitionId} onChange={e => setNewRiddle(p => ({ ...p, competitionId: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3"><option value="">-- Seleziona gara --</option>{competitions.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}</select><input type="text" placeholder="Titolo *" value={newRiddle.titolo} onChange={e => setNewRiddle(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><div className="mb-3"><label className="text-sm text-gray-600 mb-2 block">Domanda *</label><RichTextEditor editorRef={riddleEditorRef} placeholder="Scrivi la domanda..." /></div><input type="text" placeholder="Risposta (case-sensitive) *" value={newRiddle.risposta} onChange={e => setNewRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data inizio</label><input type="date" value={newRiddle.dataInizio} onChange={e => setNewRiddle(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora inizio</label><input type="time" value={newRiddle.oraInizio} onChange={e => setNewRiddle(p => ({ ...p, oraInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data fine</label><input type="date" value={newRiddle.dataFine} onChange={e => setNewRiddle(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora fine</label><input type="time" value={newRiddle.oraFine} onChange={e => setNewRiddle(p => ({ ...p, oraFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><button type="button" onClick={() => setShowPuntiCustom(!showPuntiCustom)} className="text-sm text-purple-600 mb-3"><Trophy size={14} className="inline" /> Punteggi</button>{showPuntiCustom && <div className="mb-3 p-3 bg-purple-50 rounded-xl grid grid-cols-4 gap-2"><div><label className="text-xs">1°</label><input type="number" min="0" value={newRiddle.puntoPrimo} onChange={e => setNewRiddle(p => ({ ...p, puntoPrimo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">2°</label><input type="number" min="0" value={newRiddle.puntoSecondo} onChange={e => setNewRiddle(p => ({ ...p, puntoSecondo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">3°</label><input type="number" min="0" value={newRiddle.puntoTerzo} onChange={e => setNewRiddle(p => ({ ...p, puntoTerzo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">Altri</label><input type="number" min="0" value={newRiddle.puntoAltri} onChange={e => setNewRiddle(p => ({ ...p, puntoAltri: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div></div>}<button onClick={handleAddRiddle} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Crea'}</button></div><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Tutti i quiz ({riddles.length})</h3><div className="space-y-2 max-h-96 overflow-y-auto">{riddles.map(r => { const comp = competitions.find(c => c.id === r.competitionId); return (<div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between items-start"><div className="flex-1"><span className="font-medium">{r.titolo}</span><span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{comp?.nome || 'N/A'}</span><div className="flex gap-1 mt-1"><button onClick={() => viewAnswers(r)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button><button onClick={() => startEditRiddle(r)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded"><Edit3 size={12} className="inline" /> Modifica</button></div><p className="text-xs text-gray-500 mt-1">Risposta: {r.risposta}</p><p className="text-xs text-gray-400">{formatDateTime(r.dataInizio)} - {formatDateTime(r.dataFine)}</p></div><button onClick={() => setConfirmDelete({ type: 'riddle', id: r.id, name: r.titolo })} className="text-red-500 p-1"><Trash2 size={16} /></button></div>); })}</div></div></div>}
+        {activeTab === 'competitions' && <div className="space-y-4"><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuova Gara</h3><input type="text" placeholder="Nome *" value={newCompetition.nome} onChange={e => setNewCompetition(p => ({ ...p, nome: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><textarea placeholder="Descrizione breve" value={newCompetition.descrizione} onChange={e => setNewCompetition(p => ({ ...p, descrizione: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3 h-20" /><div className="mb-4"><label className="text-sm text-gray-600 mb-2 block flex items-center gap-2"><FileText size={16} /> Regolamento</label><RichTextEditor editorRef={regolamentoEditorRef} placeholder="Regolamento..." /></div><div className="grid grid-cols-2 gap-3 mb-4"><div><label className="text-sm text-gray-600">Inizio</label><input type="date" value={newCompetition.dataInizio} onChange={e => setNewCompetition(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Fine</label><input type="date" value={newCompetition.dataFine} onChange={e => setNewCompetition(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><div className="mb-4"><BonusPointsEditor bonus={newCompetition.bonusPunti} onChange={b => setNewCompetition(p => ({ ...p, bonusPunti: b }))} label="Bonus default per i quiz" /></div><button onClick={handleAddCompetition} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Crea'}</button></div><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Tutte le gare ({competitions.length})</h3>{competitions.map(c => <div key={c.id} className="p-4 bg-gray-50 rounded-xl border flex justify-between items-center mb-2"><div className="cursor-pointer flex-1" onClick={() => setSelectedCompetition(c)}><h4 className="font-semibold text-purple-700">{c.nome}</h4><p className="text-sm text-gray-500">{formatDate(c.dataInizio)} - {formatDate(c.dataFine)}</p><p className="text-xs text-gray-400">{riddles.filter(r => r.competitionId === c.id).length} quiz • {c.participantsCount || 0} iscritti</p></div><div className="flex gap-2"><button onClick={() => startEditCompetition(c)} className="text-purple-600 p-2"><Edit3 size={18} /></button><button onClick={() => setConfirmDelete({ type: 'competition', id: c.id, name: c.nome })} className="text-red-500 p-2"><Trash2 size={18} /></button></div></div>)}</div></div>}
+        {activeTab === 'riddles' && <div className="space-y-4"><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuovo Quiz</h3><select value={newRiddle.competitionId} onChange={e => setNewRiddle(p => ({ ...p, competitionId: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3"><option value="">-- Seleziona gara --</option>{competitions.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}</select><input type="text" placeholder="Titolo *" value={newRiddle.titolo} onChange={e => setNewRiddle(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><div className="mb-3"><label className="text-sm text-gray-600 mb-2 block">Domanda *</label><RichTextEditor editorRef={riddleEditorRef} placeholder="Scrivi la domanda..." /></div><input type="text" placeholder="Risposta (case-sensitive) *" value={newRiddle.risposta} onChange={e => setNewRiddle(p => ({ ...p, risposta: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data inizio</label><input type="date" value={newRiddle.dataInizio} onChange={e => setNewRiddle(p => ({ ...p, dataInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora inizio</label><input type="time" value={newRiddle.oraInizio} onChange={e => setNewRiddle(p => ({ ...p, oraInizio: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><div className="grid grid-cols-2 gap-3 mb-3"><div><label className="text-sm text-gray-600">Data fine</label><input type="date" value={newRiddle.dataFine} onChange={e => setNewRiddle(p => ({ ...p, dataFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div><div><label className="text-sm text-gray-600">Ora fine</label><input type="time" value={newRiddle.oraFine} onChange={e => setNewRiddle(p => ({ ...p, oraFine: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl" /></div></div><div className="flex gap-3 mb-3"><button type="button" onClick={() => setShowPuntiCustom(!showPuntiCustom)} className="text-sm text-purple-600"><Trophy size={14} className="inline" /> Punteggi</button><button type="button" onClick={() => setShowBonusCustom(!showBonusCustom)} className="text-sm text-green-600"><Gift size={14} className="inline" /> Bonus</button></div>{showPuntiCustom && <div className="mb-3 p-3 bg-purple-50 rounded-xl grid grid-cols-4 gap-2"><div><label className="text-xs">1°</label><input type="number" min="0" value={newRiddle.puntoPrimo} onChange={e => setNewRiddle(p => ({ ...p, puntoPrimo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">2°</label><input type="number" min="0" value={newRiddle.puntoSecondo} onChange={e => setNewRiddle(p => ({ ...p, puntoSecondo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">3°</label><input type="number" min="0" value={newRiddle.puntoTerzo} onChange={e => setNewRiddle(p => ({ ...p, puntoTerzo: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div><div><label className="text-xs">Altri</label><input type="number" min="0" value={newRiddle.puntoAltri} onChange={e => setNewRiddle(p => ({ ...p, puntoAltri: e.target.value }))} className="w-full px-2 py-2 border rounded text-center" /></div></div>}{showBonusCustom && <div className="mb-3"><BonusPointsEditor bonus={newRiddle.bonusPunti} onChange={b => setNewRiddle(p => ({ ...p, bonusPunti: b }))} /><p className="text-xs text-gray-500 mt-1">Se lasci a 0, userà i bonus della gara</p></div>}<button onClick={handleAddRiddle} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : 'Crea'}</button></div><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Tutti i quiz ({riddles.length})</h3><div className="space-y-2 max-h-96 overflow-y-auto">{riddles.map(r => { const comp = competitions.find(c => c.id === r.competitionId); const bonus = r.bonusPunti || {}; const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0; return (<div key={r.id} className="p-3 bg-gray-50 rounded-xl border flex justify-between items-start"><div className="flex-1"><span className="font-medium">{r.titolo}</span><span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{comp?.nome || 'N/A'}</span>{hasBonus && <span className="ml-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full"><Gift size={10} className="inline" /> Bonus</span>}<div className="flex gap-1 mt-1"><button onClick={() => viewAnswers(r)} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded"><Eye size={12} className="inline" /></button><button onClick={() => startEditRiddle(r)} className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded"><Edit3 size={12} className="inline" /> Modifica</button></div><p className="text-xs text-gray-500 mt-1">Risposta: {r.risposta}</p><p className="text-xs text-gray-400">{formatDateTime(r.dataInizio)} - {formatDateTime(r.dataFine)}</p></div><button onClick={() => setConfirmDelete({ type: 'riddle', id: r.id, name: r.titolo })} className="text-red-500 p-1"><Trash2 size={16} /></button></div>); })}</div></div></div>}
         {activeTab === 'announcements' && <div className="space-y-4"><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-4"><Plus size={18} className="inline" /> Nuovo Avviso</h3><input type="text" placeholder="Titolo *" value={newAnnouncement.titolo} onChange={e => setNewAnnouncement(p => ({ ...p, titolo: e.target.value }))} className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3" /><div className="mb-4"><label className="text-sm text-gray-600 mb-2 block">Messaggio *</label><RichTextEditor editorRef={announcementEditorRef} placeholder="Scrivi il messaggio..." /></div><button onClick={handleAddAnnouncement} disabled={submitting} className="w-full bg-purple-600 text-white py-3 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2">{submitting ? <Loader2 size={18} className="animate-spin" /> : <><Megaphone size={18} /> Invia</>}</button></div><div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Avvisi ({announcements.length})</h3>{announcements.map(a => <div key={a.id} className="p-4 bg-gray-50 rounded-xl border mb-2 flex justify-between"><div className="flex-1"><h4 className="font-semibold">{a.titolo}</h4><div className="text-sm text-gray-600 mt-1" dangerouslySetInnerHTML={{ __html: a.messaggio }} /><p className="text-xs text-gray-400 mt-2">{formatDateTime(a.createdAt)}</p></div><button onClick={() => setConfirmDelete({ type: 'announcement', id: a.id, name: a.titolo })} className="text-red-500 p-1 ml-2"><Trash2 size={16} /></button></div>)}</div></div>}
-        {activeTab === 'users' && <div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Utenti ({users.length})</h3><div className="space-y-2 max-h-[60vh] overflow-y-auto">{users.map(u => <div key={u.id} className="p-4 bg-gray-50 rounded-xl border flex justify-between items-center"><div><p className="font-medium">{u.username}</p><p className="text-sm text-gray-500">{u.email}</p></div><button onClick={() => setConfirmDelete({ type: 'user', id: u.id, name: u.username })} className="text-red-500 p-2"><Trash2 size={18} /></button></div>)}</div></div>}
+        {activeTab === 'users' && <div className="bg-white rounded-2xl p-5"><h3 className="font-bold mb-3">Utenti ({users.length})</h3><div className="space-y-2 max-h-[60vh] overflow-y-auto">{users.map(u => <div key={u.id} className="p-4 bg-gray-50 rounded-xl border flex justify-between items-center"><div className="flex-1"><p className="font-medium">{u.username}</p><p className="text-sm text-gray-500">{u.email}</p>{u.usernameChangedAt && <p className="text-xs text-gray-400">Username cambiato: {formatDate(u.usernameChangedAt)}</p>}</div><div className="flex gap-2"><button onClick={() => setEditingUser(u)} className="text-purple-600 p-2"><Edit3 size={18} /></button><button onClick={() => setConfirmDelete({ type: 'user', id: u.id, name: u.username })} className="text-red-500 p-2"><Trash2 size={18} /></button></div></div>)}</div></div>}
       </div>
       <AdminBottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
     </div>
