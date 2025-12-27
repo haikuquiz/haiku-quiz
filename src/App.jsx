@@ -1054,14 +1054,39 @@ const App = () => {
       // Invia email di verifica
       await sendEmailVerification(cred.user);
       
-      await setDoc(doc(db, 'users', cred.user.uid), {
+      const userData = {
         username: username.trim(),
         email,
         readAnnouncements: [],
         dismissedNotifications: [],
         usernameChangedAt: null,
         createdAt: serverTimestamp()
-      });
+      };
+      
+      await setDoc(doc(db, 'users', cred.user.uid), userData);
+      
+      // Webhook Pabbly Connect per nuova registrazione
+      const webhookUrl = import.meta.env.VITE_PABBLY_WEBHOOK_URL;
+      if (webhookUrl) {
+        try {
+          await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            mode: 'no-cors',
+            body: JSON.stringify({
+              event: 'new_registration',
+              userId: cred.user.uid,
+              username: username.trim(),
+              email: email,
+              timestamp: new Date().toISOString()
+            })
+          });
+        } catch (webhookError) {
+          console.error('Webhook error:', webhookError);
+          // Non bloccare la registrazione se il webhook fallisce
+        }
+      }
+      
       showMsg('✅ Registrazione completata! Controlla la tua email.');
     } catch (e) {
       showMsg(e.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore');
