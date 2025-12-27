@@ -66,7 +66,9 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
         points = getPointsForPosition(correctPos, riddle) + bonus;
         correctPos++;
         if (riddle.competitionId) {
-          const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${ans.userId}`);
+          // competitionScores usa oderId come chiave
+          const oderId = ans.userId || ans.oderId;
+          const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`);
           const scoreDoc = await getDoc(scoreRef);
           if (scoreDoc.exists()) {
             await updateDoc(scoreRef, { points: (scoreDoc.data().points || 0) + points });
@@ -515,7 +517,13 @@ const RiddleAnswersView = ({ riddle, answers, users, currentUserId, onBack }) =>
     const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
     return timeA - timeB;
   });
-  const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
+  // Crea mappa che supporta sia oderId che id come chiave
+  const userMap = {};
+  users.forEach(u => {
+    if (u.oderId) userMap[u.oderId] = u.username;
+    if (u.id) userMap[u.id] = u.username;
+    if (u.userId) userMap[u.userId] = u.username;
+  });
   
   return (
     <div className="bg-white rounded-2xl shadow-xl p-6">
@@ -1149,7 +1157,7 @@ const App = () => {
     if (!user || userAnswers[riddleId]) return;
     
     const answerData = {
-      oderId: user.uid,
+      userId: user.uid,
       riddleId,
       answer,
       time: serverTimestamp(),

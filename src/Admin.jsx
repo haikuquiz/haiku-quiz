@@ -89,7 +89,7 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
     if (riddle.competitionId) {
       const oldAnswersWithPoints = answers.filter(a => a.points > 0);
       for (const oldAns of oldAnswersWithPoints) {
-        const oderId = oldAns.oderId || oldAns.oderId;
+        const oderId = oldAns.userId || oldAns.oderId;
         const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`);
         const scoreDoc = await getDoc(scoreRef);
         if (scoreDoc.exists()) {
@@ -122,7 +122,7 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
       
       updates.push({
         ref: ans.ref,
-        oderId: ans.oderId || ans.oderId,
+        oderId: ans.userId || ans.oderId,
         points,
         isCorrect,
         bonus: ansBonus
@@ -268,7 +268,13 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
     const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
     return timeA - timeB;
   });
-  const userMap = Object.fromEntries(users.map(u => [u.oderId || u.id, u.username]));
+  // Crea una mappa che supporta sia oderId che id come chiave
+  const userMap = {};
+  users.forEach(u => {
+    if (u.oderId) userMap[u.oderId] = u.username;
+    if (u.id) userMap[u.id] = u.username;
+    if (u.userId) userMap[u.userId] = u.username;
+  });
   const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
   const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
   const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
@@ -313,13 +319,14 @@ const RiddleAnswersView = ({ riddle, answers, users, onBack, onRecalculate, reca
         <div className="space-y-2 max-h-96 overflow-y-auto">
           {sorted.map((ans, i) => {
             const correct = compareAnswers(ans.answer, riddle.risposta);
+            const oderId = ans.userId || ans.oderId;
             return (
               <div key={ans.id} className={`p-3 rounded-xl border ${correct ? 'bg-green-50 border-green-200' : 'bg-white'}`}>
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
                     <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold ${correct ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>{i + 1}</span>
                     <div>
-                      <span className="font-medium">{userMap[ans.oderId] || userMap[ans.oderId] || ans.oderId || 'Utente'}</span>
+                      <span className="font-medium">{userMap[oderId] || 'Utente'}</span>
                       <p className="text-xs text-gray-500">{formatDateTime(ans.time)}</p>
                       <p className={`text-sm ${correct ? 'text-green-700 font-medium' : 'text-red-600'}`}>"{ans.answer}"</p>
                     </div>
@@ -614,10 +621,10 @@ const Admin = () => {
     if (!userId || newUsername.trim().length < 3) return;
     setSubmitting(true);
     try {
-      await updateDoc(doc(db, 'users', oderId), { username: newUsername.trim() });
+      await updateDoc(doc(db, 'users', userId), { username: newUsername.trim() });
       
       // Aggiorna anche nei punteggi delle competizioni
-      const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', oderId)));
+      const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('userId', '==', userId)));
       for (const scoreDoc of scoresSnap.docs) {
         await updateDoc(scoreDoc.ref, { username: newUsername.trim() });
       }
@@ -645,12 +652,12 @@ const Admin = () => {
       } else if (confirmDelete.type === 'riddle') {
         const riddle = riddles.find(r => r.id === confirmDelete.id);
         const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', confirmDelete.id)));
-        for (const d of snap.docs) { const ans = d.data(); if (ans.points > 0 && riddle?.competitionId) { const oderId = ans.oderId || ans.oderId; const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`); const scoreDoc = await getDoc(scoreRef); if (scoreDoc.exists()) await updateDoc(scoreRef, { points: Math.max(0, (scoreDoc.data().points || 0) - ans.points) }); } await deleteDoc(d.ref); }
+        for (const d of snap.docs) { const ans = d.data(); if (ans.points > 0 && riddle?.competitionId) { const oderId = ans.userId || ans.oderId; const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`); const scoreDoc = await getDoc(scoreRef); if (scoreDoc.exists()) await updateDoc(scoreRef, { points: Math.max(0, (scoreDoc.data().points || 0) - ans.points) }); } await deleteDoc(d.ref); }
         await deleteDoc(doc(db, 'riddles', confirmDelete.id));
       } else if (confirmDelete.type === 'user') {
-        const answersSnap = await getDocs(query(collection(db, 'answers'), where('oderId', '==', confirmDelete.id)));
+        const answersSnap = await getDocs(query(collection(db, 'answers'), where('userId', '==', confirmDelete.id)));
         for (const d of answersSnap.docs) await deleteDoc(d.ref);
-        const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', confirmDelete.id)));
+        const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('userId', '==', confirmDelete.id)));
         for (const d of scoresSnap.docs) await deleteDoc(d.ref);
         await deleteDoc(doc(db, 'users', confirmDelete.id));
       } else if (confirmDelete.type === 'announcement') { await deleteDoc(doc(db, 'announcements', confirmDelete.id)); }
