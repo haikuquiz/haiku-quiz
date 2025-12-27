@@ -3,12 +3,12 @@ import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB7pNObwdvRJ1zuRkdqi7nBFsb43-fP49g",
-  authDomain: "haiku-quiz.firebaseapp.com",
-  projectId: "haiku-quiz",
-  storageBucket: "haiku-quiz.firebasestorage.app",
-  messagingSenderId: "22024455002",
-  appId: "1:22024455002:web:1513775bad8c2a12aee963"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
