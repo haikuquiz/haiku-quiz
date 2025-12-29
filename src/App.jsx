@@ -42,14 +42,28 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
   if (riddle.pointsAssigned) return false;
   try {
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
-    const answers = [];
-    answersSnap.forEach(d => answers.push({ id: d.id, ref: d.ref, ...d.data() }));
+    const allAnswers = [];
+    answersSnap.forEach(d => allAnswers.push({ id: d.id, ref: d.ref, ...d.data() }));
     
-    answers.sort((a, b) => {
+    allAnswers.sort((a, b) => {
       const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
       const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
       return timeA - timeB;
     });
+    
+    // Filtra solo la prima risposta per ogni utente
+    const seenUsers = new Set();
+    const answers = [];
+    for (const ans of allAnswers) {
+      const oderId = ans.userId || ans.oderId;
+      if (!seenUsers.has(oderId)) {
+        seenUsers.add(oderId);
+        answers.push(ans);
+      } else {
+        // Imposta punti a 0 per le risposte duplicate
+        await updateDoc(ans.ref, { points: 0, isCorrect: false, duplicate: true });
+      }
+    }
     
     const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta));
     const correctCount = correctAnswers.length;
@@ -563,7 +577,16 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
             <p className="text-sm mt-2">Tua: "{userAnswer}" {compareAnswers(userAnswer, riddle.risposta) ? '✅' : '❌'}</p>
           )}
         </div>
-      ) : !hasAnswered && !isViewOnly ? (
+      ) : hasAnswered ? (
+        <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4">
+          <p className="text-green-700 font-medium flex items-center gap-2 mb-2"><Check size={18} /> Risposta inviata</p>
+          <div className="bg-white rounded-lg p-3 border border-green-100">
+            <p className="text-sm text-gray-600">La tua risposta:</p>
+            <p className="text-lg font-semibold text-gray-800 mt-1">"{userAnswer}"</p>
+          </div>
+          <p className="text-xs text-gray-500 mt-3">Il risultato sarà visibile al termine del quiz</p>
+        </div>
+      ) : !isViewOnly ? (
         <>
           <p className="text-xs text-gray-500 mb-2">Scade: {formatDateTime(riddle.dataFine)}</p>
           <p className="text-xs text-red-500 mb-3 font-medium">⚠️ Un solo tentativo!</p>
@@ -574,11 +597,7 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
             </button>
           </div>
         </>
-      ) : (
-        <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-          <p className="text-green-700 font-medium flex items-center gap-2"><Check size={18} /> Inviata: "{userAnswer}"</p>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 };
@@ -1042,7 +1061,15 @@ const App = () => {
 
   const handleSubmitAnswer = async (riddleId, answer) => {
     if (!user || userAnswers[riddleId]) return;
-    const answerData = { oderId: user.uid, riddleId, answer, time: serverTimestamp(), points: 0, isCorrect: null };
+    
+    // Verifica lato server se esiste già una risposta
+    const existingSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId), where('userId', '==', user.uid)));
+    if (!existingSnap.empty) {
+      showMsg('⚠️ Hai già risposto a questo quiz');
+      return;
+    }
+    
+    const answerData = { userId: user.uid, riddleId, answer, time: serverTimestamp(), points: 0, isCorrect: null };
     setUserAnswers(prev => ({ ...prev, [riddleId]: answerData }));
     showMsg('✅ Inviata!');
     try { await setDoc(doc(collection(db, 'answers')), answerData); } catch (e) { console.error('Submit error:', e); setUserAnswers(prev => { const n = { ...prev }; delete n[riddleId]; return n; }); showMsg('Errore'); }

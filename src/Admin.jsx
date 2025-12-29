@@ -45,25 +45,45 @@ const recalculateRiddlePoints = async (riddleId, riddle, onLog) => {
   try {
     log(`\n📝 Ricalcolo: "${riddle.titolo}"`);
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
-    const answers = [];
-    answersSnap.forEach(d => answers.push({ id: d.id, ref: d.ref, ...d.data() }));
-    if (answers.length === 0) {
+    const allAnswers = [];
+    answersSnap.forEach(d => allAnswers.push({ id: d.id, ref: d.ref, ...d.data() }));
+    if (allAnswers.length === 0) {
       await updateDoc(doc(db, 'riddles', riddleId), { pointsAssigned: true, correctCount: 0 });
       return { success: true, processed: 0 };
     }
-    answers.sort((a, b) => {
+    allAnswers.sort((a, b) => {
       const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0);
       const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0);
       return timeA - timeB;
     });
+    
+    // Filtra solo la prima risposta per ogni utente
+    const seenUsers = new Set();
+    const answers = [];
+    let duplicateCount = 0;
+    for (const ans of allAnswers) {
+      const oderId = ans.userId || ans.oderId;
+      if (!seenUsers.has(oderId)) {
+        seenUsers.add(oderId);
+        answers.push(ans);
+      } else {
+        // Imposta punti a 0 per le risposte duplicate
+        await updateDoc(ans.ref, { points: 0, isCorrect: false, duplicate: true });
+        duplicateCount++;
+      }
+    }
+    if (duplicateCount > 0) {
+      log(`   ⚠️ ${duplicateCount} risposte duplicate ignorate`);
+    }
+    
     const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
     const getPoints = (pos) => pos === 0 ? punti.primo : pos === 1 ? punti.secondo : pos === 2 ? punti.terzo : punti.altri;
     const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta));
     const correctCount = correctAnswers.length;
     const bonus = getBonusPoints(correctCount, riddle);
-    log(`   Risposte corrette: ${correctCount}, Bonus: +${bonus}`);
+    log(`   Risposte valide: ${answers.length}, Corrette: ${correctCount}, Bonus: +${bonus}`);
     if (riddle.competitionId) {
-      for (const oldAns of answers.filter(a => a.points > 0)) {
+      for (const oldAns of allAnswers.filter(a => a.points > 0)) {
         const oderId = oldAns.userId || oldAns.oderId;
         const scoreRef = doc(db, 'competitionScores', `${riddle.competitionId}_${oderId}`);
         const scoreDoc = await getDoc(scoreRef);
