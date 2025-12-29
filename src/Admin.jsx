@@ -399,7 +399,11 @@ const Admin = () => {
 
   const viewAnswers = async (r) => { setViewingRiddle(r); setRecalcLog([]); const snap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', r.id))); setRiddleAnswers(snap.docs.map(d => ({ id: d.id, ...d.data() }))); };
   const startEditCompetition = (comp) => { setEditingCompetition({ ...comp, bonusPunti: comp.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 } }); setTimeout(() => { if (regolamentoEditorRef.current) regolamentoEditorRef.current.innerHTML = comp.regolamento || ''; }, 100); };
-  const getCompetitionRiddles = (compId) => riddles.filter(r => r.competitionId === compId);
+  const getCompetitionRiddles = (compId) => riddles.filter(r => r.competitionId === compId).sort((a, b) => {
+    const dateA = a.dataInizio?.toDate ? a.dataInizio.toDate().getTime() : new Date(a.dataInizio).getTime();
+    const dateB = b.dataInizio?.toDate ? b.dataInizio.toDate().getTime() : new Date(b.dataInizio).getTime();
+    return dateA - dateB;
+  });
   const categorizeRiddles = (compRiddles) => {
     const now = new Date();
     return {
