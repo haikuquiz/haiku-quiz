@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar, Settings, Edit3, Save, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit, Timestamp } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, updateEmail, verifyBeforeUpdateEmail } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, verifyBeforeUpdateEmail } from 'firebase/auth';
 
 const formatDateTime = (ts) => {
   if (!ts) return '-';
@@ -297,13 +297,15 @@ const ChangeEmailModal = ({ user, onClose, onSuccess }) => {
   );
 };
 
-const ProfileView = ({ userData, user, onUpdateUsername, updating, canChangeUsername, daysUntilChange, onChangeEmail }) => {
+const ProfileView = ({ userData, user, onUpdateUsername, onUpdateFullName, updating, canChangeUsername, daysUntilChange, onChangeEmail }) => {
   const [editingUsername, setEditingUsername] = useState(false);
+  const [editingFullName, setEditingFullName] = useState(false);
   const [newUsername, setNewUsername] = useState(userData?.username || '');
+  const [newFullName, setNewFullName] = useState(userData?.fullName || '');
   const [error, setError] = useState('');
   const [showChangeEmail, setShowChangeEmail] = useState(false);
 
-  const handleSave = async () => {
+  const handleSaveUsername = async () => {
     if (newUsername.trim().length < 3) {
       setError('Minimo 3 caratteri');
       return;
@@ -311,6 +313,18 @@ const ProfileView = ({ userData, user, onUpdateUsername, updating, canChangeUser
     const success = await onUpdateUsername(newUsername.trim());
     if (success) {
       setEditingUsername(false);
+      setError('');
+    }
+  };
+
+  const handleSaveFullName = async () => {
+    if (newFullName.trim().length < 3) {
+      setError('Minimo 3 caratteri');
+      return;
+    }
+    const success = await onUpdateFullName(newFullName.trim());
+    if (success) {
+      setEditingFullName(false);
       setError('');
     }
   };
@@ -325,38 +339,69 @@ const ProfileView = ({ userData, user, onUpdateUsername, updating, canChangeUser
             <User size={32} className="text-purple-600" />
           </div>
           <div className="flex-1">
-            {editingUsername ? (
-              <div className="flex gap-2">
-                <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} className="flex-1 px-3 py-2 border-2 border-purple-200 rounded-xl" placeholder="Nuovo username" />
-                <button onClick={handleSave} disabled={updating} className="p-2 bg-green-500 text-white rounded-xl">
-                  {updating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
-                </button>
-                <button onClick={() => { setEditingUsername(false); setNewUsername(userData?.username || ''); setError(''); }} className="p-2 bg-gray-200 rounded-xl"><X size={20} /></button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold text-gray-800">{userData?.username}</h2>
-                {canChangeUsername && <button onClick={() => setEditingUsername(true)} className="p-1 text-purple-600"><Edit3 size={18} /></button>}
-              </div>
-            )}
-            <p className="text-sm text-gray-500">{user?.email}</p>
-            {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+            <h2 className="text-xl font-bold text-gray-800">{userData?.username}</h2>
+            <p className="text-sm text-gray-500">{userData?.fullName}</p>
           </div>
         </div>
-        
-        {!canChangeUsername && daysUntilChange > 0 && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 mb-4">
-            <p className="text-sm text-yellow-700">⏳ Potrai cambiare username tra {daysUntilChange} giorni</p>
-          </div>
-        )}
 
         <div className="space-y-3">
+          <div className="py-3 border-b">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Nome completo</span>
+              {!editingFullName && (
+                <button onClick={() => { setEditingFullName(true); setNewFullName(userData?.fullName || ''); }} className="text-purple-600 text-sm font-medium flex items-center gap-1">
+                  Modifica <Edit3 size={14} />
+                </button>
+              )}
+            </div>
+            {editingFullName ? (
+              <div className="flex gap-2 mt-2">
+                <input type="text" value={newFullName} onChange={e => setNewFullName(e.target.value)} className="flex-1 px-3 py-2 border-2 border-purple-200 rounded-xl" placeholder="Nome e Cognome" />
+                <button onClick={handleSaveFullName} disabled={updating} className="p-2 bg-green-500 text-white rounded-xl">
+                  {updating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
+                </button>
+                <button onClick={() => { setEditingFullName(false); setError(''); }} className="p-2 bg-gray-200 rounded-xl"><X size={20} /></button>
+              </div>
+            ) : (
+              <p className="text-gray-800 font-medium mt-1">{userData?.fullName || '-'}</p>
+            )}
+          </div>
+
+          <div className="py-3 border-b">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600">Nickname</span>
+              {!editingUsername && canChangeUsername && (
+                <button onClick={() => { setEditingUsername(true); setNewUsername(userData?.username || ''); }} className="text-purple-600 text-sm font-medium flex items-center gap-1">
+                  Modifica <Edit3 size={14} />
+                </button>
+              )}
+            </div>
+            {editingUsername ? (
+              <div className="flex gap-2 mt-2">
+                <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} className="flex-1 px-3 py-2 border-2 border-purple-200 rounded-xl" placeholder="Nuovo nickname" />
+                <button onClick={handleSaveUsername} disabled={updating} className="p-2 bg-green-500 text-white rounded-xl">
+                  {updating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
+                </button>
+                <button onClick={() => { setEditingUsername(false); setError(''); }} className="p-2 bg-gray-200 rounded-xl"><X size={20} /></button>
+              </div>
+            ) : (
+              <p className="text-gray-800 font-medium mt-1">{userData?.username}</p>
+            )}
+            {!canChangeUsername && daysUntilChange > 0 && (
+              <p className="text-xs text-yellow-600 mt-1">⏳ Potrai cambiare nickname tra {daysUntilChange} giorni</p>
+            )}
+          </div>
+
+          {error && <p className="text-xs text-red-500">{error}</p>}
+
           <div className="flex justify-between items-center py-3 border-b">
             <span className="text-gray-600">Email</span>
             <button onClick={() => setShowChangeEmail(true)} className="text-purple-600 text-sm font-medium flex items-center gap-1">
               Cambia <ChevronRight size={16} />
             </button>
           </div>
+          <p className="text-gray-800 font-medium -mt-2 mb-2">{user?.email}</p>
+
           <div className="flex justify-between py-3 border-b">
             <span className="text-gray-600">Email verificata</span>
             <span className={user?.emailVerified ? 'text-green-600' : 'text-red-500'}>{user?.emailVerified ? '✓ Sì' : '✗ No'}</span>
@@ -683,6 +728,7 @@ const App = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [fullName, setFullName] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -915,6 +961,7 @@ const App = () => {
 
   const handleRegister = async () => {
     if (authLoading) return;
+    if (fullName.trim().length < 3) { showMsg('Nome completo: min 3 caratteri'); return; }
     if (username.trim().length < 3) { showMsg('Nickname: min 3 caratteri'); return; }
     if (!email.includes('@')) { showMsg('Email non valida'); return; }
     if (password.length < 6) { showMsg('Password: min 6 caratteri'); return; }
@@ -922,11 +969,11 @@ const App = () => {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await sendEmailVerification(cred.user);
-      const userData = { username: username.trim(), email, readAnnouncements: [], dismissedNotifications: [], usernameChangedAt: null, createdAt: serverTimestamp() };
+      const userData = { fullName: fullName.trim(), username: username.trim(), email, readAnnouncements: [], dismissedNotifications: [], usernameChangedAt: null, createdAt: serverTimestamp() };
       await setDoc(doc(db, 'users', cred.user.uid), userData);
       const webhookUrl = import.meta.env.VITE_PABBLY_WEBHOOK_URL;
       if (webhookUrl) {
-        try { await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, mode: 'no-cors', body: JSON.stringify({ event: 'new_registration', oderId: cred.user.uid, username: username.trim(), email, timestamp: new Date().toISOString() }) }); } catch (e) { console.error('Webhook error:', e); }
+        try { await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, mode: 'no-cors', body: JSON.stringify({ event: 'new_registration', oderId: cred.user.uid, fullName: fullName.trim(), username: username.trim(), email, timestamp: new Date().toISOString() }) }); } catch (e) { console.error('Webhook error:', e); }
       }
       showMsg('✅ Registrazione completata! Controlla la tua email.');
     } catch (e) { showMsg(e.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore'); } finally { setAuthLoading(false); }
@@ -954,7 +1001,18 @@ const App = () => {
       const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', user.uid)));
       for (const scoreDoc of scoresSnap.docs) await updateDoc(scoreDoc.ref, { username: newUsername });
       setUserData(prev => ({ ...prev, username: newUsername, usernameChangedAt: Timestamp.now() }));
-      showMsg('✅ Username aggiornato!');
+      showMsg('✅ Nickname aggiornato!');
+      return true;
+    } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
+  };
+
+  const handleUpdateFullName = async (newFullName) => {
+    if (!user || !userData || updatingUsername) return false;
+    setUpdatingUsername(true);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { fullName: newFullName });
+      setUserData(prev => ({ ...prev, fullName: newFullName }));
+      showMsg('✅ Nome aggiornato!');
       return true;
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
   };
@@ -1176,13 +1234,22 @@ const App = () => {
             <h2 className="text-xl font-bold text-gray-800 mb-6">{isLoginMode ? 'Accedi' : 'Registrati'}</h2>
             
             {!isLoginMode && (
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-600 mb-2">Nickname</label>
-                <div className="relative">
-                  <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                  <input type="text" placeholder="Min. 3 caratteri" value={username} onChange={e => setUsername(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
+              <>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-600 mb-2">Nome completo</label>
+                  <div className="relative">
+                    <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" placeholder="Nome e Cognome" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
+                  </div>
                 </div>
-              </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-600 mb-2">Nickname</label>
+                  <div className="relative">
+                    <Star size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input type="text" placeholder="Min. 3 caratteri" value={username} onChange={e => setUsername(e.target.value)} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
+                  </div>
+                </div>
+              </>
             )}
             
             <div className="mb-4">
@@ -1295,7 +1362,7 @@ const App = () => {
               </div>
             )}
 
-            {activeTab === 'profile' && <ProfileView userData={userData} user={user} onUpdateUsername={handleUpdateUsername} updating={updatingUsername} canChangeUsername={canChangeUsername()} daysUntilChange={daysUntilUsernameChange()} />}
+            {activeTab === 'profile' && <ProfileView userData={userData} user={user} onUpdateUsername={handleUpdateUsername} onUpdateFullName={handleUpdateFullName} updating={updatingUsername} canChangeUsername={canChangeUsername()} daysUntilChange={daysUntilUsernameChange()} />}
           </>
         )}
 
