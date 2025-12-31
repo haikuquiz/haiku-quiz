@@ -36,21 +36,31 @@ const recalculateRiddlePoints = async (riddleId, riddle, competition) => {
   } catch (e) { return { success: false, error: e.message }; }
 };
 
+
 const resetAndRecalculateAllScores = async (competitionId, compRiddles, competition) => {
   try {
     const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('competitionId', '==', competitionId)));
     for (const scoreDoc of scoresSnap.docs) await updateDoc(scoreDoc.ref, { points: 0 });
-    for (const riddle of compRiddles) {
-      await updateDoc(doc(db, 'riddles', riddle.id), { pointsAssigned: false, correctCount: 0 });
-      const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddle.id)));
-      for (const ansDoc of answersSnap.docs) await updateDoc(ansDoc.ref, { points: 0, isCorrect: false, bonus: 0 });
-    }
+    const userPoints = {};
     const now = new Date();
     let processed = 0;
     for (const riddle of compRiddles) {
       const end = riddle.dataFine?.toDate ? riddle.dataFine.toDate() : new Date(riddle.dataFine);
-      if (now > end) { const result = await recalculateRiddlePoints(riddle.id, riddle, competition); if (result.success) processed++; }
+      if (now <= end) continue;
+      const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddle.id)));
+      const allAnswers = []; answersSnap.forEach(d => allAnswers.push({ id: d.id, ref: d.ref, ...d.data() }));
+      if (allAnswers.length === 0) { await updateDoc(doc(db, 'riddles', riddle.id), { pointsAssigned: true, correctCount: 0 }); processed++; continue; }
+      allAnswers.sort((a, b) => { const timeA = a.time?.toDate ? a.time.toDate().getTime() : (a.time?.seconds ? a.time.seconds * 1000 : 0); const timeB = b.time?.toDate ? b.time.toDate().getTime() : (b.time?.seconds ? b.time.seconds * 1000 : 0); return timeA - timeB; });
+      const seenUsers = new Set(); const answers = [];
+      for (const ans of allAnswers) { const oderId = ans.userId || ans.oderId; if (!seenUsers.has(oderId)) { seenUsers.add(oderId); answers.push(ans); } else { await updateDoc(ans.ref, { points: 0, isCorrect: false, duplicate: true }); } }
+      const punti = getEffectivePoints(riddle, competition); const getPoints = (pos) => pos === 0 ? (punti.primo || 2) : (punti.altri || 1);
+      const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta)); const correctCount = correctAnswers.length; const bonus = getBonusPoints(correctCount, riddle, competition);
+      let correctPosition = 0;
+      for (const ans of answers) { const isCorrect = compareAnswers(ans.answer, riddle.risposta); let points = 0, ansBonus = 0; if (isCorrect) { ansBonus = bonus; points = getPoints(correctPosition) + ansBonus; correctPosition++; const oderId = ans.userId || ans.oderId; userPoints[oderId] = (userPoints[oderId] || 0) + points; } await updateDoc(ans.ref, { points, isCorrect, bonus: ansBonus }); }
+      await updateDoc(doc(db, 'riddles', riddle.id), { pointsAssigned: true, correctCount });
+      processed++;
     }
+    for (const oderId in userPoints) { const scoreRef = doc(db, 'competitionScores', `${competitionId}_${oderId}`); const scoreDoc = await getDoc(scoreRef); if (scoreDoc.exists()) await updateDoc(scoreRef, { points: userPoints[oderId] }); }
     return { success: true, processed };
   } catch (e) { return { success: false, error: e.message }; }
 };
