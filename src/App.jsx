@@ -467,9 +467,21 @@ const ProfileView = ({ userData, user, onUpdateUsername, onUpdateFullName, updat
   );
 };
 
-const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank, competitionRiddles, isPastCompetition }) => {
+const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, userRank, competitionRiddles, isPastCompetition, userCorrectAnswers, totalParticipants, allScoresForComp }) => {
   const now = new Date();
   let start, end, isActive, isPast;
+  
+  // Calcola quiz pubblicati (scaduti)
+  const publishedQuizzes = competitionRiddles ? competitionRiddles.filter(r => {
+    const e = r.dataFine?.toDate ? r.dataFine.toDate() : new Date(r.dataFine);
+    return now > e;
+  }).length : 0;
+  
+  const totalQuizzes = competitionRiddles ? competitionRiddles.length : 0;
+  
+  // Calcola rank
+  const sortedScores = allScoresForComp ? [...allScoresForComp].sort((a, b) => (b.points || 0) - (a.points || 0)) : [];
+  const rank = userRank || (sortedScores.length > 0 ? sortedScores.findIndex(s => s.points === userScore) + 1 : 0);
   
   if (competitionRiddles && competitionRiddles.length > 0) {
     const dates = competitionRiddles.map(r => ({
@@ -495,7 +507,7 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
           </div>
           <div>
             <h3 className="font-bold text-gray-800">{competition.nome}</h3>
-            <p className="text-xs text-gray-500">{competition.participantsCount || 0} partecipanti</p>
+            <p className="text-xs text-gray-500">{totalParticipants || competition.participantsCount || 0} partecipanti • {totalQuizzes} quiz</p>
           </div>
         </div>
         <span className={`text-xs px-3 py-1 rounded-full font-medium ${isActive ? 'bg-green-100 text-green-700' : isPast ? 'bg-gray-100 text-gray-600' : 'bg-blue-100 text-blue-700'}`}>
@@ -505,9 +517,15 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
       {competition.descrizione && <p className="text-sm text-gray-600 mb-3">{competition.descrizione}</p>}
       <p className="text-xs text-gray-400 mb-3">{formatDate(start)} - {formatDate(end)}</p>
       {isJoined && (
-        <div className="bg-purple-50 rounded-xl p-3 mb-3 flex justify-between items-center">
-          <span className="flex items-center gap-1"><Crown size={16} className="text-yellow-500" /> {userScore || 0} pt</span>
-          <span className="text-sm text-gray-600">#{userRank || '-'}</span>
+        <div className="bg-purple-50 rounded-xl p-3 mb-3">
+          <div className="flex justify-between items-center mb-2">
+            <span className="flex items-center gap-1 text-lg font-bold text-purple-700"><Crown size={18} className="text-yellow-500" /> {userScore || 0} pt</span>
+            <span className="text-sm font-medium text-purple-600 bg-purple-100 px-2 py-1 rounded-lg">#{rank || '-'}</span>
+          </div>
+          <div className="flex justify-between text-xs text-gray-600">
+            <span>✓ {userCorrectAnswers || 0}/{publishedQuizzes} risposte corrette</span>
+            <span>{publishedQuizzes}/{totalQuizzes} quiz completati</span>
+          </div>
         </div>
       )}
       <button onClick={() => onSelect(competition)} className={`w-full py-3 rounded-xl font-semibold flex items-center justify-center gap-2 ${isJoined ? 'bg-purple-600 text-white' : isPast ? 'bg-gray-200 text-gray-700' : 'bg-purple-500 text-white'}`}>
@@ -823,6 +841,8 @@ const App = () => {
   const [riddles, setRiddles] = useState([]);
   const [allRiddles, setAllRiddles] = useState([]);
   const [allUserScores, setAllUserScores] = useState([]);
+  const [allCompetitionScores, setAllCompetitionScores] = useState({});
+  const [userCorrectAnswersByComp, setUserCorrectAnswersByComp] = useState({});
   const [userAnswers, setUserAnswers] = useState({});
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
@@ -940,6 +960,41 @@ const App = () => {
     });
   }, [user]);
 
+
+  // Carica tutti gli scores per ogni gara a cui lutente partecipa (per calcolare rank)
+  useEffect(() => {
+    if (!user || userCompetitions.length === 0) { setAllCompetitionScores({}); return; }
+    const unsubscribes = [];
+    userCompetitions.forEach(compId => {
+      const unsub = onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', compId)), (snap) => {
+        const scores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setAllCompetitionScores(prev => ({ ...prev, [compId]: scores }));
+      });
+      unsubscribes.push(unsub);
+    });
+    return () => unsubscribes.forEach(u => u());
+  }, [user, userCompetitions]);
+
+  // Carica risposte corrette utente per ogni gara
+  useEffect(() => {
+    if (!user || userCompetitions.length === 0) { setUserCorrectAnswersByComp({}); return; }
+    const loadCorrectAnswers = async () => {
+      const result = {};
+      // Prendi tutte le risposte corrette dell'utente
+      const answersSnap = await getDocs(query(collection(db, 'answers'), where('oderId', '==', user.uid), where('isCorrect', '==', true)));
+      const correctAnswers = answersSnap.docs.map(d => d.data());
+      // Prendi tutti i riddles per mappare riddleId -> competitionId
+      const riddlesSnap = await getDocs(collection(db, 'riddles'));
+      const riddleToComp = {};
+      riddlesSnap.docs.forEach(d => { riddleToComp[d.id] = d.data().competitionId; });
+      // Conta risposte corrette per competizione
+      for (const compId of userCompetitions) {
+        result[compId] = correctAnswers.filter(a => riddleToComp[a.riddleId] === compId).length;
+      }
+      setUserCorrectAnswersByComp(result);
+    };
+    loadCorrectAnswers();
+  }, [user, userCompetitions]);
   useEffect(() => {
     if (!selectedCompetition) { setRiddles([]); return; }
     return onSnapshot(query(collection(db, 'riddles'), where('competitionId', '==', selectedCompetition.id)), async (snap) => {
@@ -1393,7 +1448,7 @@ const App = () => {
                     <div className="space-y-4">
                       {activeJoinedComps.map(comp => {
                         const usd = allUserScores.find(s => s.competitionId === comp.id);
-                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} />;
+                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} userCorrectAnswers={userCorrectAnswersByComp[comp.id] || 0} allScoresForComp={allCompetitionScores[comp.id] || []} />;
                       })}
                     </div>
                   </div>
@@ -1414,7 +1469,7 @@ const App = () => {
                     <div className="space-y-4">
                       {allJoinedComps.map(comp => {
                         const usd = allUserScores.find(s => s.competitionId === comp.id);
-                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} />;
+                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} userCorrectAnswers={userCorrectAnswersByComp[comp.id] || 0} allScoresForComp={allCompetitionScores[comp.id] || []} />;
                       })}
                     </div>
                   </div>
@@ -1425,7 +1480,7 @@ const App = () => {
                   <div className="bg-white rounded-2xl p-8 text-center"><p className="text-gray-500">Nessuna nuova gara disponibile</p></div>
                 ) : (
                   competitions.filter(c => !userCompetitions.includes(c.id)).map(comp => (
-                    <CompetitionCard key={comp.id} competition={comp} isJoined={false} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={0} competitionRiddles={getRiddlesForCompetition(comp.id)} isPastCompetition={isCompetitionPast(comp)} />
+                    <CompetitionCard key={comp.id} competition={comp} isJoined={false} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={0} competitionRiddles={getRiddlesForCompetition(comp.id)} isPastCompetition={isCompetitionPast(comp)} userCorrectAnswers={0} allScoresForComp={allCompetitionScores[comp.id] || []} />
                   ))
                 )}
               </div>
