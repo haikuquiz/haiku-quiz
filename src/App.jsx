@@ -73,6 +73,9 @@ const sendUserWebhook = async (event, userData) => {
 };
 
 const assignPointsForRiddle = async (riddleId, riddle, competition) => {
+  // Rileggi dal DB per evitare race conditions
+  const freshRiddle = await getDoc(doc(db, 'riddles', riddleId));
+  if (freshRiddle.exists() && freshRiddle.data().pointsAssigned) return false;
   if (riddle.pointsAssigned) return false;
   try {
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
