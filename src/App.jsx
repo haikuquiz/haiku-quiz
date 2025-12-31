@@ -25,20 +25,54 @@ const formatDate = (ts) => {
 
 const compareAnswers = (a, b) => a?.trim() === b?.trim();
 
-const getPointsForPosition = (pos, riddle) => {
-  const p = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
-  return pos === 0 ? p.primo : pos === 1 ? p.secondo : pos === 2 ? p.terzo : p.altri;
+// Funzione per ottenere i punti effettivi (riddle override o competition default)
+const getEffectivePoints = (riddle, competition) => {
+  if (riddle.puntiCustom) return riddle.punti || { primo: 2, altri: 1 };
+  if (competition?.puntiDefault) return competition.puntiDefault;
+  return { primo: 2, altri: 1 };
 };
 
-const getBonusPoints = (correctCount, riddle) => {
-  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+const getEffectiveBonus = (riddle, competition) => {
+  if (riddle.bonusCustom) return riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  if (competition?.bonusDefault) return competition.bonusDefault;
+  return { uno: 0, finoCinque: 0, seiDieci: 0 };
+};
+
+const getPointsForPosition = (pos, riddle, competition) => {
+  const p = getEffectivePoints(riddle, competition);
+  return pos === 0 ? (p.primo || 2) : (p.altri || 1);
+};
+
+const getBonusPoints = (correctCount, riddle, competition) => {
+  const bonus = getEffectiveBonus(riddle, competition);
   if (correctCount === 1) return bonus.uno || 0;
   if (correctCount >= 2 && correctCount <= 5) return bonus.finoCinque || 0;
   if (correctCount >= 6 && correctCount <= 10) return bonus.seiDieci || 0;
   return 0;
 };
 
-const assignPointsForRiddle = async (riddleId, riddle) => {
+// Funzione per inviare webhook
+const sendUserWebhook = async (event, userData) => {
+  const webhookUrl = import.meta.env.VITE_PABBLY_WEBHOOK_URL;
+  if (!webhookUrl) return;
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      mode: 'no-cors',
+      body: JSON.stringify({
+        event,
+        oderId: userData.oderId || userData.id,
+        fullName: userData.fullName,
+        username: userData.username,
+        email: userData.email,
+        timestamp: new Date().toISOString()
+      })
+    });
+  } catch (e) { console.error('Webhook error:', e); }
+};
+
+const assignPointsForRiddle = async (riddleId, riddle, competition) => {
   if (riddle.pointsAssigned) return false;
   try {
     const answersSnap = await getDocs(query(collection(db, 'answers'), where('riddleId', '==', riddleId)));
@@ -67,14 +101,14 @@ const assignPointsForRiddle = async (riddleId, riddle) => {
     
     const correctAnswers = answers.filter(ans => compareAnswers(ans.answer, riddle.risposta));
     const correctCount = correctAnswers.length;
-    const bonus = getBonusPoints(correctCount, riddle);
+    const bonus = getBonusPoints(correctCount, riddle, competition);
     
     let correctPos = 0;
     for (const ans of answers) {
       const isCorrect = compareAnswers(ans.answer, riddle.risposta);
       let points = 0;
       if (isCorrect) {
-        points = getPointsForPosition(correctPos, riddle) + bonus;
+        points = getPointsForPosition(correctPos, riddle, competition) + bonus;
         correctPos++;
         if (riddle.competitionId) {
           const oderId = ans.userId || ans.oderId;
@@ -480,11 +514,9 @@ const CompetitionCard = ({ competition, isJoined, onJoin, onSelect, userScore, u
   );
 };
 
-const ScheduledRiddleCard = ({ riddle }) => {
+const ScheduledRiddleCard = ({ riddle, competition }) => {
   const start = riddle.dataInizio?.toDate ? riddle.dataInizio.toDate() : new Date(riddle.dataInizio);
-  const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
-  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
-  const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
+  const hasCustomPoints = riddle.puntiCustom || riddle.bonusCustom;
 
   return (
     <div className="rounded-2xl p-4 bg-blue-50 border-2 border-blue-200 border-dashed">
@@ -497,23 +529,16 @@ const ScheduledRiddleCard = ({ riddle }) => {
           <p className="text-xs text-blue-600">Disponibile dal {formatDateTime(start)}</p>
         </div>
       </div>
-      <div className="flex flex-wrap gap-2 mt-3">
-        <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
-        <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
-        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
-        <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
-      </div>
-      {hasBonus && (
-        <div className="mt-2 p-2 bg-green-50 rounded-lg">
-          <p className="text-xs text-green-700 font-medium">🎁 Bonus pochi rispondenti:</p>
-          <p className="text-xs text-green-600">Solo 1: +{bonus.uno} | Max 5: +{bonus.finoCinque} | 6-10: +{bonus.seiDieci}</p>
+      {hasCustomPoints && (
+        <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <p className="text-xs text-yellow-700 font-medium">⭐ Punteggio speciale per questo quiz!</p>
         </div>
       )}
     </div>
   );
 };
 
-const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, showViewButton, isViewOnly }) => {
+const RiddleCard = ({ riddle, competition, onSubmit, hasAnswered, userAnswer, onViewAnswers, showViewButton, isViewOnly }) => {
   const [answer, setAnswer] = useState('');
   const [submitting, setSubmitting] = useState(false);
   
@@ -522,8 +547,11 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
   const end = riddle.dataFine?.toDate ? riddle.dataFine.toDate() : new Date(riddle.dataFine);
   const isPublished = now >= start;
   const isExpired = now > end;
-  const punti = riddle.punti || { primo: 3, secondo: 1, terzo: 1, altri: 1 };
-  const bonus = riddle.bonusPunti || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  
+  // Controlla se ha punteggio custom
+  const hasCustomPoints = riddle.puntiCustom || riddle.bonusCustom;
+  const punti = getEffectivePoints(riddle, competition);
+  const bonus = getEffectiveBonus(riddle, competition);
   const hasBonus = bonus.uno > 0 || bonus.finoCinque > 0 || bonus.seiDieci > 0;
 
   const handleSubmit = async () => {
@@ -538,7 +566,7 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
   };
 
   if (!isPublished) {
-    return <ScheduledRiddleCard riddle={riddle} />;
+    return <ScheduledRiddleCard riddle={riddle} competition={competition} />;
   }
 
   return (
@@ -553,17 +581,18 @@ const RiddleCard = ({ riddle, onSubmit, hasAnswered, userAnswer, onViewAnswers, 
       </div>
       
       <div className="text-gray-700 mb-4" dangerouslySetInnerHTML={{ __html: riddle.domanda }} />
-      <div className="flex flex-wrap gap-2 mb-3">
-        <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
-        <span className="text-xs bg-gray-100 px-2 py-1 rounded-full">2° {punti.secondo}pt</span>
-        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">3° {punti.terzo}pt</span>
-        <span className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
-      </div>
       
-      {hasBonus && !isExpired && (
-        <div className="mb-3 p-2 bg-green-50 rounded-lg">
-          <p className="text-xs text-green-700 font-medium">🎁 Bonus pochi rispondenti:</p>
-          <p className="text-xs text-green-600">Solo 1: +{bonus.uno} | Max 5: +{bonus.finoCinque} | 6-10: +{bonus.seiDieci}</p>
+      {/* Mostra punti solo se sono custom per questo quiz */}
+      {hasCustomPoints && (
+        <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-xl">
+          <p className="text-xs text-yellow-700 font-medium mb-2">⭐ Punteggio speciale per questo quiz:</p>
+          <div className="flex flex-wrap gap-2">
+            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">1° {punti.primo}pt</span>
+            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full">Altri {punti.altri}pt</span>
+          </div>
+          {hasBonus && (
+            <p className="text-xs text-yellow-600 mt-2">Bonus: Solo 1 +{bonus.uno} | 2-5 +{bonus.finoCinque} | 6-10 +{bonus.seiDieci}</p>
+          )}
         </div>
       )}
       
@@ -693,6 +722,10 @@ const CompetitionInfoView = ({ competition, competitionRiddles }) => {
     end = competition.dataFine?.toDate ? competition.dataFine.toDate() : new Date(competition.dataFine);
   }
 
+  const puntiDefault = competition.puntiDefault || { primo: 2, altri: 1 };
+  const bonusDefault = competition.bonusDefault || { uno: 0, finoCinque: 0, seiDieci: 0 };
+  const hasBonus = bonusDefault.uno > 0 || bonusDefault.finoCinque > 0 || bonusDefault.seiDieci > 0;
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl p-5">
@@ -704,6 +737,33 @@ const CompetitionInfoView = ({ competition, competitionRiddles }) => {
           {competition.descrizione && <p><strong>Descrizione:</strong> {competition.descrizione}</p>}
         </div>
       </div>
+      
+      {/* Sezione Punteggi */}
+      <div className="bg-white rounded-2xl p-5">
+        <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Trophy size={18} className="text-yellow-500" /> Punteggi</h3>
+        <div className="space-y-3">
+          <div className="p-3 bg-purple-50 rounded-xl">
+            <p className="text-sm font-medium text-purple-700 mb-2">Punti standard:</p>
+            <div className="flex gap-3">
+              <span className="text-sm bg-yellow-100 text-yellow-700 px-3 py-1 rounded-full">1° classificato: {puntiDefault.primo} pt</span>
+              <span className="text-sm bg-gray-100 text-gray-700 px-3 py-1 rounded-full">Altri: {puntiDefault.altri} pt</span>
+            </div>
+          </div>
+          {hasBonus && (
+            <div className="p-3 bg-green-50 rounded-xl">
+              <p className="text-sm font-medium text-green-700 mb-2">🎁 Punti bonus:</p>
+              <div className="text-sm text-green-600 space-y-1">
+                {bonusDefault.uno > 0 && <p>• Se risponde solo 1 persona: <strong>+{bonusDefault.uno}</strong></p>}
+                {bonusDefault.finoCinque > 0 && <p>• Se rispondono da 2 a 5 persone: <strong>+{bonusDefault.finoCinque}</strong></p>}
+                {bonusDefault.seiDieci > 0 && <p>• Se rispondono da 6 a 10 persone: <strong>+{bonusDefault.seiDieci}</strong></p>}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">I bonus si aggiungono ai punti standard</p>
+            </div>
+          )}
+          <p className="text-xs text-gray-500 italic">Alcuni quiz potrebbero avere punteggi speciali diversi, indicati direttamente nel quiz.</p>
+        </div>
+      </div>
+      
       {competition.regolamento ? (
         <div className="bg-white rounded-2xl p-5">
           <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><FileText size={18} className="text-purple-600" /> Regolamento</h3>
@@ -886,7 +946,7 @@ const App = () => {
         const data = { id: docSnap.id, ...docSnap.data() };
         const end = data.dataFine?.toDate ? data.dataFine.toDate() : new Date(data.dataFine);
         if (now > end && !data.pointsAssigned) {
-          try { await assignPointsForRiddle(docSnap.id, data); data.pointsAssigned = true; } catch (e) { console.error('Error assigning points:', e); }
+          try { await assignPointsForRiddle(docSnap.id, data, selectedCompetition); data.pointsAssigned = true; } catch (e) { console.error('Error assigning points:', e); }
         }
         list.push(data);
       }
@@ -953,13 +1013,16 @@ const App = () => {
         for (const docSnap of snap.docs) {
           const data = docSnap.data();
           const end = data.dataFine?.toDate ? data.dataFine.toDate() : new Date(data.dataFine);
-          if (now > end) await assignPointsForRiddle(docSnap.id, data);
+          if (now > end) {
+            const comp = competitions.find(c => c.id === data.competitionId);
+            await assignPointsForRiddle(docSnap.id, data, comp);
+          }
         }
       } catch (e) { console.error('Periodic check error:', e); }
     };
     const interval = setInterval(check, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [competitions]);
 
   const handleNotificationNavigate = (notification) => {
     const comp = competitions.find(c => c.id === notification.competitionId);
@@ -1020,6 +1083,7 @@ const App = () => {
       const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', user.uid)));
       for (const scoreDoc of scoresSnap.docs) await updateDoc(scoreDoc.ref, { username: newUsername });
       setUserData(prev => ({ ...prev, username: newUsername, usernameChangedAt: Timestamp.now() }));
+      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: userData.fullName, username: newUsername, email: userData.email });
       showMsg('✅ Nickname aggiornato!');
       return true;
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
@@ -1031,6 +1095,7 @@ const App = () => {
     try {
       await updateDoc(doc(db, 'users', user.uid), { fullName: newFullName });
       setUserData(prev => ({ ...prev, fullName: newFullName }));
+      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: newFullName, username: userData.username, email: userData.email });
       showMsg('✅ Nome aggiornato!');
       return true;
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
@@ -1186,7 +1251,7 @@ const App = () => {
                     <div className="mb-6">
                       <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Star className="text-yellow-500" /> Attivi ({activeRiddles.length})</h3>
                       <div className="space-y-4">
-                        {activeRiddles.map(r => <RiddleCard key={r.id} riddle={r} onSubmit={handleSubmitAnswer} hasAnswered={!!userAnswers[r.id]} userAnswer={userAnswers[r.id]?.answer} onViewAnswers={handleViewAnswers} showViewButton={r.pointsAssigned} isViewOnly={false} />)}
+                        {activeRiddles.map(r => <RiddleCard key={r.id} riddle={r} competition={selectedCompetition} onSubmit={handleSubmitAnswer} hasAnswered={!!userAnswers[r.id]} userAnswer={userAnswers[r.id]?.answer} onViewAnswers={handleViewAnswers} showViewButton={r.pointsAssigned} isViewOnly={false} />)}
                       </div>
                     </div>
                   )}
@@ -1198,7 +1263,7 @@ const App = () => {
                   {scheduledRiddles.length > 0 && !isViewOnly && (
                     <div className="mb-6">
                       <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Calendar className="text-blue-500" /> In arrivo ({scheduledRiddles.length})</h3>
-                      <div className="space-y-3">{scheduledRiddles.map(r => <ScheduledRiddleCard key={r.id} riddle={r} />)}</div>
+                      <div className="space-y-3">{scheduledRiddles.map(r => <ScheduledRiddleCard key={r.id} riddle={r} competition={selectedCompetition} />)}</div>
                     </div>
                   )}
                   
@@ -1206,7 +1271,7 @@ const App = () => {
                     <div className="mb-6">
                       <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><Clock className="text-gray-400" /> {isViewOnly ? 'Quiz' : 'Conclusi'} ({pastRiddles.length})</h3>
                       <div className="space-y-3">
-                        {pastRiddles.map(r => <RiddleCard key={r.id} riddle={r} onSubmit={handleSubmitAnswer} hasAnswered={!!userAnswers[r.id]} userAnswer={userAnswers[r.id]?.answer} onViewAnswers={handleViewAnswers} showViewButton={r.pointsAssigned} isViewOnly={isViewOnly} />)}
+                        {pastRiddles.map(r => <RiddleCard key={r.id} riddle={r} competition={selectedCompetition} onSubmit={handleSubmitAnswer} hasAnswered={!!userAnswers[r.id]} userAnswer={userAnswers[r.id]?.answer} onViewAnswers={handleViewAnswers} showViewButton={r.pointsAssigned} isViewOnly={isViewOnly} />)}
                       </div>
                     </div>
                   )}
@@ -1289,6 +1354,124 @@ const App = () => {
             
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-600 mb-2">Password</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input type="password" placeholder="Min. 6 caratteri" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && (isLoginMode ? handleLogin() : handleRegister())} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
+              </div>
+            </div>
+            
+            {isLoginMode && (
+              <button onClick={() => setShowForgotPassword(true)} className="w-full text-right text-sm text-purple-600 mb-4">Password dimenticata?</button>
+            )}
+            
+            <button onClick={isLoginMode ? handleLogin : handleRegister} disabled={authLoading} className="w-full bg-purple-600 text-white py-4 rounded-xl font-semibold disabled:bg-gray-400 flex items-center justify-center gap-2 mb-4">
+              {authLoading ? <Loader2 size={20} className="animate-spin" /> : (isLoginMode ? 'Accedi' : 'Registrati')}
+            </button>
+            
+            <button onClick={() => { setIsLoginMode(!isLoginMode); setMessage(''); }} className="w-full text-purple-600 text-sm">
+              {isLoginMode ? 'Non hai un account? Registrati' : 'Hai già un account? Accedi'}
+            </button>
+            
+            {message && <div className={`mt-4 p-3 rounded-xl text-center text-sm ${message.includes('✅') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{message}</div>}
+          </div>
+        ) : (
+          <>
+            {activeTab === 'home' && (
+              <>
+                {unreadAnnouncements.length > 0 && (
+                  <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab('notifications')}>
+                    <Bell className="text-purple-600" size={20} /><span className="text-purple-700">{unreadAnnouncements.length} nuov{unreadAnnouncements.length === 1 ? 'o avviso' : 'i avvisi'}</span><ChevronRight className="text-purple-400 ml-auto" size={18} />
+                  </div>
+                )}
+                
+                {activeJoinedComps.length > 0 ? (
+                  <div className="mb-6">
+                    <h3 className="font-bold text-gray-800 mb-3">Gare attive</h3>
+                    <div className="space-y-4">
+                      {activeJoinedComps.map(comp => {
+                        const usd = allUserScores.find(s => s.competitionId === comp.id);
+                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} />;
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl p-8 text-center mb-6">
+                    <Flag size={48} className="mx-auto text-purple-200 mb-4" /><p className="text-gray-600 font-medium">Nessuna gara attiva</p>
+                    <button onClick={() => setActiveTab('competitions')} className="mt-4 bg-purple-600 text-white px-6 py-3 rounded-xl font-semibold">Scopri le gare</button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {activeTab === 'competitions' && (
+              <div className="space-y-4">
+                {allJoinedComps.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="font-bold text-gray-800 mb-3">Le tue gare</h3>
+                    <div className="space-y-4">
+                      {allJoinedComps.map(comp => {
+                        const usd = allUserScores.find(s => s.competitionId === comp.id);
+                        return <CompetitionCard key={comp.id} competition={comp} isJoined={true} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={usd?.points} competitionRiddles={getRiddlesForCompetition(comp.id)} />;
+                      })}
+                    </div>
+                  </div>
+                )}
+                
+                <h3 className="font-bold text-gray-800">Tutte le gare</h3>
+                {competitions.filter(c => !userCompetitions.includes(c.id)).length === 0 ? (
+                  <div className="bg-white rounded-2xl p-8 text-center"><p className="text-gray-500">Nessuna nuova gara disponibile</p></div>
+                ) : (
+                  competitions.filter(c => !userCompetitions.includes(c.id)).map(comp => (
+                    <CompetitionCard key={comp.id} competition={comp} isJoined={false} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={0} competitionRiddles={getRiddlesForCompetition(comp.id)} isPastCompetition={isCompetitionPast(comp)} />
+                  ))
+                )}
+              </div>
+            )}
+
+            {activeTab === 'notifications' && (
+              <div className="space-y-4">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Megaphone className="text-purple-600" /> Avvisi</h3>
+                {announcements.length === 0 ? (
+                  <div className="bg-white rounded-2xl p-8 text-center"><Bell size={48} className="mx-auto text-gray-200 mb-4" /><p className="text-gray-500">Nessun avviso</p></div>
+                ) : (
+                  announcements.map(ann => (
+                    <div key={ann.id} className={`bg-white rounded-2xl p-4 ${!readAnnouncements.includes(ann.id) ? 'border-2 border-purple-300' : ''}`}>
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center flex-shrink-0"><Megaphone className="text-purple-600" size={18} /></div>
+                        <div className="flex-1">
+                          <div className="flex justify-between items-start">
+                            <h4 className="font-bold text-gray-800">{ann.titolo}</h4>
+                            {!readAnnouncements.includes(ann.id) && <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded-full">Nuovo</span>}
+                          </div>
+                          <div className="text-sm text-gray-600 mt-1" dangerouslySetInnerHTML={{ __html: ann.messaggio }} />
+                          <p className="text-xs text-gray-400 mt-2">{formatDate(ann.createdAt)}</p>
+                        </div>
+                      </div>
+                      {!readAnnouncements.includes(ann.id) && <button onClick={() => handleMarkAnnouncementRead(ann.id)} className="w-full mt-3 text-sm text-purple-600 font-medium">Segna come letto</button>}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {activeTab === 'profile' && <ProfileView userData={userData} user={user} onUpdateUsername={handleUpdateUsername} onUpdateFullName={handleUpdateFullName} updating={updatingUsername} canChangeUsername={canChangeUsername()} daysUntilChange={daysUntilUsernameChange()} />}
+          </>
+        )}
+
+        {message && user && <div className="fixed bottom-20 left-4 right-4 max-w-lg mx-auto bg-purple-600 text-white p-4 rounded-xl text-center shadow-lg">{message}</div>}
+      </div>
+
+      {user && <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} hasNotifications={unreadAnnouncements.length > 0} />}
+      
+      <style>{`
+        @keyframes slide-down { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-slide-down { animation: slide-down 0.3s ease-out; }
+      `}</style>
+    </div>
+  );
+};
+
+export default App;d</label>
               <div className="relative">
                 <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input type="password" placeholder="Min. 6 caratteri" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && (isLoginMode ? handleLogin() : handleRegister())} className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl" />
