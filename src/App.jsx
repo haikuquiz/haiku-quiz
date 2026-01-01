@@ -1141,7 +1141,7 @@ const App = () => {
       const scoresSnap = await getDocs(query(collection(db, 'competitionScores'), where('oderId', '==', user.uid)));
       for (const scoreDoc of scoresSnap.docs) await updateDoc(scoreDoc.ref, { username: newUsername });
       setUserData(prev => ({ ...prev, username: newUsername, usernameChangedAt: Timestamp.now() }));
-      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: userData.fullName, username: newUsername, email: userData.email });
+      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: userData.fullName, username: newUsername, email: user.email });
       showMsg('✅ Nickname aggiornato!');
       return true;
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
@@ -1153,7 +1153,7 @@ const App = () => {
     try {
       await updateDoc(doc(db, 'users', user.uid), { fullName: newFullName });
       setUserData(prev => ({ ...prev, fullName: newFullName }));
-      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: newFullName, username: userData.username, email: userData.email });
+      await sendUserWebhook('user_updated', { oderId: user.uid, fullName: newFullName, username: userData.username, email: user.email });
       showMsg('✅ Nome aggiornato!');
       return true;
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
