@@ -1354,9 +1354,9 @@ const App = () => {
   }
 
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
-  const activeJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && isCompetitionActive(c));
-  const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id));
-  const pastComps = competitions.filter(c => isCompetitionPast(c) && !userCompetitions.includes(c.id));
+  const activeJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && isCompetitionActive(c) && !c.archived);
+  const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && !c.archived);
+  const pastComps = competitions.filter(c => isCompetitionPast(c) && !userCompetitions.includes(c.id) && !c.archived);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
@@ -1476,10 +1476,10 @@ const App = () => {
                 )}
                 
                 <h3 className="font-bold text-gray-800">Tutte le gare</h3>
-                {competitions.filter(c => !userCompetitions.includes(c.id)).length === 0 ? (
+                {competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived).length === 0 ? (
                   <div className="bg-white rounded-2xl p-8 text-center"><p className="text-gray-500">Nessuna nuova gara disponibile</p></div>
                 ) : (
-                  competitions.filter(c => !userCompetitions.includes(c.id)).map(comp => (
+                  competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived).map(comp => (
                     <CompetitionCard key={comp.id} competition={comp} isJoined={false} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={0} competitionRiddles={getRiddlesForCompetition(comp.id)} isPastCompetition={isCompetitionPast(comp)} userCorrectAnswers={0} allScoresForComp={allCompetitionScores[comp.id] || []} />
                   ))
                 )}
