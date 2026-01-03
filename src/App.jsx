@@ -395,10 +395,16 @@ const TrainingView = ({ collections, selectedCollection, riddles, progress, onSe
                   {isCompleted && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Completata!</span>}
                 </div>
                 {col.descrizione && <p className="text-sm text-gray-600 mb-3">{col.descrizione}</p>}
+                <div className="bg-purple-50 rounded-xl p-3 mb-3 text-sm">
+                  <p className="font-semibold text-purple-800 mb-1">📋 Regole:</p>
+                  <p className="text-purple-700">• <strong>{col.maxAttemptsPerDay || 5}</strong> tentativi al giorno</p>
+                  <p className="text-purple-700">• <strong>{col.maxPass || 3}</strong> "passo" totali per saltare</p>
+                </div>
                 <div className="bg-gray-50 rounded-xl p-3 mb-3">
+                  <p className="text-sm font-semibold text-gray-700 mb-2">Il tuo progresso:</p>
                   <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Progresso: <strong>{currentRiddle}/{col.riddlesCount || 0}</strong></span>
-                    <span className="text-gray-600">Passo: <strong>{passRemaining}</strong> rimasti</span>
+                    <span className="text-gray-600">Indovinelli: <strong>{currentRiddle}/{col.riddlesCount || 0}</strong></span>
+                    <span className="text-gray-600">Passo usati: <strong>{passUsed}/{col.maxPass || 3}</strong></span>
                   </div>
                   <div className="flex justify-between text-sm mt-1">
                     <span className="text-gray-600">Tentativi oggi: <strong>{attemptsRemaining}</strong> rimasti</span>
