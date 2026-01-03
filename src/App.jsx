@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar, Settings, Edit3, Save, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { Trophy, Star, LogOut, Mail, Lock, User, Check, Loader2, Clock, ArrowLeft, ChevronRight, Flag, UserPlus, Crown, Home, Bell, X, Megaphone, Info, FileText, Award, Calendar, Settings, Edit3, Save, Eye, EyeOff, KeyRound, Dumbbell, SkipForward, Target, Play, RotateCcw } from 'lucide-react';
 import { db, auth } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, orderBy, where, onSnapshot, serverTimestamp, limit, Timestamp } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendEmailVerification, sendPasswordResetEmail, verifyBeforeUpdateEmail } from 'firebase/auth';
@@ -159,6 +159,7 @@ const BottomNav = ({ activeTab, setActiveTab, hasNotifications }) => (
       {[
         { id: 'home', icon: Home, label: 'Home' },
         { id: 'competitions', icon: Flag, label: 'Gare' },
+        { id: 'training', icon: Dumbbell, label: 'Allena' },
         { id: 'notifications', icon: Bell, label: 'Avvisi', badge: hasNotifications },
         { id: 'profile', icon: User, label: 'Profilo' }
       ].map(tab => (
@@ -348,7 +349,187 @@ const ChangeEmailModal = ({ user, onClose, onSuccess }) => {
   );
 };
 
-const ProfileView = ({ userData, user, onUpdateUsername, onUpdateFullName, updating, canChangeUsername, daysUntilChange, onChangeEmail }) => {
+
+// Training View Component
+const TrainingView = ({ collections, selectedCollection, riddles, progress, onSelect, onBack, onAnswer, onPass, user }) => {
+  const [answer, setAnswer] = useState('');
+  const [feedback, setFeedback] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Filtra solo collezioni pubblicate per gli utenti
+  const publishedCollections = collections.filter(c => c.published !== false);
+
+  if (!selectedCollection) {
+    // Lista collezioni
+    return (
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2"><Dumbbell className="text-purple-600" /> Allenamento</h2>
+        <p className="text-gray-600 text-sm">Metti alla prova le tue abilità con le nostre collezioni di indovinelli!</p>
+        {publishedCollections.length === 0 ? (
+          <div className="bg-white rounded-2xl p-8 text-center">
+            <Target size={48} className="mx-auto text-gray-300 mb-3" />
+            <p className="text-gray-500">Nessuna collezione disponibile</p>
+          </div>
+        ) : (
+          publishedCollections.map(col => {
+            const userProg = progress[col.id];
+            const currentRiddle = userProg?.currentRiddle || 0;
+            const passUsed = userProg?.passUsed || 0;
+            const passRemaining = (col.maxPass || 3) - passUsed;
+            const attemptsToday = userProg?.lastAttemptDate === new Date().toDateString() ? (userProg?.attemptsToday || 0) : 0;
+            const attemptsRemaining = (col.maxAttemptsPerDay || 5) - attemptsToday;
+            const isCompleted = currentRiddle >= (col.riddlesCount || 0);
+            
+            return (
+              <div key={col.id} className={`bg-white rounded-2xl p-5 border-2 ${isCompleted ? 'border-green-400' : 'border-gray-100'}`}>
+                <div className="flex justify-between items-start mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isCompleted ? 'bg-green-100' : 'bg-purple-100'}`}>
+                      {isCompleted ? <Check className="text-green-600" size={24} /> : <Target className="text-purple-600" size={24} />}
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-800">{col.nome}</h3>
+                      <p className="text-xs text-gray-500">{col.riddlesCount || 0} indovinelli</p>
+                    </div>
+                  </div>
+                  {isCompleted && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Completata!</span>}
+                </div>
+                {col.descrizione && <p className="text-sm text-gray-600 mb-3">{col.descrizione}</p>}
+                <div className="bg-gray-50 rounded-xl p-3 mb-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Progresso: <strong>{currentRiddle}/{col.riddlesCount || 0}</strong></span>
+                    <span className="text-gray-600">Passo: <strong>{passRemaining}</strong> rimasti</span>
+                  </div>
+                  <div className="flex justify-between text-sm mt-1">
+                    <span className="text-gray-600">Tentativi oggi: <strong>{attemptsRemaining}</strong> rimasti</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                    <div className="bg-purple-600 h-2 rounded-full" style={{ width: `${(currentRiddle / (col.riddlesCount || 1)) * 100}%` }}></div>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => onSelect(col)} 
+                  disabled={isCompleted || attemptsRemaining <= 0}
+                  className={`w-full py-3 rounded-xl font-semibold flex items-center justify-center gap-2 ${isCompleted ? 'bg-green-500 text-white' : attemptsRemaining <= 0 ? 'bg-gray-300 text-gray-500' : 'bg-purple-600 text-white'}`}
+                >
+                  {isCompleted ? <><Check size={18} /> Completata</> : attemptsRemaining <= 0 ? <><Clock size={18} /> Riprova domani</> : <><Play size={18} /> Gioca</>}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  }
+
+  // Vista gioco singola collezione
+  const userProg = progress[selectedCollection.id] || {};
+  const currentRiddleIndex = userProg.currentRiddle || 0;
+  const currentRiddle = riddles[currentRiddleIndex];
+  const passUsed = userProg.passUsed || 0;
+  const passRemaining = (selectedCollection.maxPass || 3) - passUsed;
+  const attemptsToday = userProg.lastAttemptDate === new Date().toDateString() ? (userProg.attemptsToday || 0) : 0;
+  const attemptsRemaining = (selectedCollection.maxAttemptsPerDay || 5) - attemptsToday;
+  const isCompleted = currentRiddleIndex >= riddles.length;
+
+  const handleSubmit = async () => {
+    if (!answer.trim() || !currentRiddle || submitting) return;
+    setSubmitting(true);
+    const result = await onAnswer(selectedCollection.id, currentRiddle, answer.trim(), currentRiddleIndex, attemptsToday);
+    if (result.correct) {
+      setFeedback({ type: 'success', message: '🎉 Corretto! Avanti al prossimo.' });
+      setAnswer('');
+      setTimeout(() => setFeedback(null), 2000);
+    } else {
+      setFeedback({ type: 'error', message: `❌ Sbagliato! ${result.attemptsRemaining} tentativi rimasti oggi.` });
+    }
+    setSubmitting(false);
+  };
+
+  const handlePass = async () => {
+    if (passRemaining <= 0 || !currentRiddle) return;
+    await onPass(selectedCollection.id, currentRiddleIndex, passUsed);
+    setFeedback({ type: 'info', message: '⏭️ Indovinello saltato!' });
+    setAnswer('');
+    setTimeout(() => setFeedback(null), 2000);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
+      <div className="bg-white rounded-b-3xl shadow-lg p-4 mb-4">
+        <div className="max-w-lg mx-auto flex items-center gap-3">
+          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-xl"><ArrowLeft size={24} /></button>
+          <div className="flex-1">
+            <h2 className="text-xl font-bold text-purple-800">{selectedCollection.nome}</h2>
+            <p className="text-sm text-purple-600">Indovinello {currentRiddleIndex + 1}/{riddles.length}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-lg mx-auto px-4">
+        {isCompleted ? (
+          <div className="bg-white rounded-2xl p-8 text-center">
+            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Trophy className="text-green-600" size={40} />
+            </div>
+            <h3 className="text-2xl font-bold text-green-700 mb-2">Collezione completata!</h3>
+            <p className="text-gray-600">Hai risolto tutti gli indovinelli di questa collezione.</p>
+            <button onClick={onBack} className="mt-6 bg-purple-600 text-white px-8 py-3 rounded-xl font-semibold">Torna alle collezioni</button>
+          </div>
+        ) : attemptsRemaining <= 0 ? (
+          <div className="bg-white rounded-2xl p-8 text-center">
+            <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Clock className="text-yellow-600" size={40} />
+            </div>
+            <h3 className="text-xl font-bold text-yellow-700 mb-2">Tentativi esauriti</h3>
+            <p className="text-gray-600">Hai esaurito i tentativi per oggi. Riprova domani!</p>
+            <button onClick={onBack} className="mt-6 bg-gray-500 text-white px-8 py-3 rounded-xl font-semibold">Torna alle collezioni</button>
+          </div>
+        ) : currentRiddle ? (
+          <div className="space-y-4">
+            <div className="bg-white rounded-2xl p-5">
+              <div className="flex justify-between text-sm text-gray-500 mb-4">
+                <span>🎯 Tentativi: {attemptsRemaining}</span>
+                <span>⏭️ Passo: {passRemaining}</span>
+              </div>
+              <div className="bg-purple-50 rounded-xl p-4 mb-4">
+                <div className="text-lg text-gray-800" dangerouslySetInnerHTML={{ __html: currentRiddle.domanda }} />
+              </div>
+              {feedback && (
+                <div className={`p-3 rounded-xl mb-4 ${feedback.type === 'success' ? 'bg-green-100 text-green-700' : feedback.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {feedback.message}
+                </div>
+              )}
+              <input
+                type="text"
+                placeholder="La tua risposta..."
+                value={answer}
+                onChange={e => setAnswer(e.target.value)}
+                onKeyPress={e => e.key === 'Enter' && handleSubmit()}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl mb-3"
+              />
+              <div className="flex gap-3">
+                <button onClick={handlePass} disabled={passRemaining <= 0} className="flex-1 bg-gray-200 text-gray-700 py-3 rounded-xl font-semibold flex items-center justify-center gap-2 disabled:opacity-50">
+                  <SkipForward size={18} /> Passo
+                </button>
+                <button onClick={handleSubmit} disabled={submitting || !answer.trim()} className="flex-1 bg-purple-600 text-white py-3 rounded-xl font-semibold flex items-center justify-center gap-2 disabled:bg-gray-400">
+                  {submitting ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />} Rispondi
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl p-8 text-center">
+            <Loader2 className="animate-spin mx-auto text-purple-600" size={40} />
+            <p className="text-gray-500 mt-4">Caricamento...</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ProfileView = ({ userData, user, onUpdateUsername, onUpdateFullName, updating, canChangeUsername, daysUntilChange, onChangeEmail, isInActiveCompetition }) => {
   const [editingUsername, setEditingUsername] = useState(false);
   const [editingFullName, setEditingFullName] = useState(false);
   const [newUsername, setNewUsername] = useState(userData?.username || '');
@@ -438,8 +619,10 @@ const ProfileView = ({ userData, user, onUpdateUsername, onUpdateFullName, updat
             ) : (
               <p className="text-gray-800 font-medium mt-1">{userData?.username}</p>
             )}
-            {!canChangeUsername && daysUntilChange > 0 && (
-              <p className="text-xs text-yellow-600 mt-1">⏳ Potrai cambiare nickname tra {daysUntilChange} giorni</p>
+            {!canChangeUsername && (
+              <p className="text-xs text-yellow-600 mt-1">
+                {isInActiveCompetition ? '🏆 Non puoi cambiare nickname durante una gara in corso' : `⏳ Potrai cambiare nickname tra ${daysUntilChange} giorni`}
+              </p>
             )}
           </div>
 
@@ -843,6 +1026,11 @@ const App = () => {
   const [allUserScores, setAllUserScores] = useState([]);
   const [allCompetitionScores, setAllCompetitionScores] = useState({});
   const [userCorrectAnswersByComp, setUserCorrectAnswersByComp] = useState({});
+  const [allRiddlesForComps, setAllRiddlesForComps] = useState({});
+  const [trainingCollections, setTrainingCollections] = useState([]);
+  const [selectedTraining, setSelectedTraining] = useState(null);
+  const [trainingRiddles, setTrainingRiddles] = useState([]);
+  const [userTrainingProgress, setUserTrainingProgress] = useState({});
   const [userAnswers, setUserAnswers] = useState({});
   const [viewingRiddle, setViewingRiddle] = useState(null);
   const [riddleAnswers, setRiddleAnswers] = useState([]);
@@ -903,6 +1091,35 @@ const App = () => {
             setUserData({ id: userDoc.id, ...data });
             setReadAnnouncements(data.readAnnouncements || []);
             setDismissedNotifications(data.dismissedNotifications || []);
+            
+            // Se email verificata e webhook non ancora inviato, invia webhook
+            if (firebaseUser.emailVerified && !data.webhookSent) {
+              const webhookUrl = import.meta.env.VITE_PABBLY_WEBHOOK_URL;
+              if (webhookUrl) {
+                try { 
+                  await fetch(webhookUrl, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    mode: 'no-cors', 
+                    body: JSON.stringify({ 
+                      event: 'email_verified', 
+                      oderId: firebaseUser.uid, 
+                      fullName: data.fullName, 
+                      username: data.username, 
+                      email: firebaseUser.email, 
+                      timestamp: new Date().toISOString() 
+                    }) 
+                  }); 
+                } catch (e) { console.error('Webhook error:', e); }
+              }
+              // Aggiorna documento per segnare webhook inviato e email verificata
+              await updateDoc(doc(db, 'users', firebaseUser.uid), { emailVerified: true, webhookSent: true });
+              setUserData(prev => ({ ...prev, emailVerified: true, webhookSent: true }));
+            }
+            // Aggiorna emailVerified se è cambiato
+            if (firebaseUser.emailVerified && !data.emailVerified) {
+              await updateDoc(doc(db, 'users', firebaseUser.uid), { emailVerified: true });
+            }
           }
         } catch (e) { console.error('Error loading user data:', e); }
       } else {
@@ -939,6 +1156,31 @@ const App = () => {
     return onSnapshot(query(collection(db, 'riddles')), (snap) => setAllRiddles(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, []);
 
+  // Carica collezioni allenamento
+  useEffect(() => {
+    return onSnapshot(query(collection(db, 'trainingCollections'), orderBy('createdAt', 'desc')), (snap) => {
+      setTrainingCollections(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  // Carica progresso utente allenamento
+  useEffect(() => {
+    if (!user) { setUserTrainingProgress({}); return; }
+    return onSnapshot(query(collection(db, 'userTrainingProgress'), where('oderId', '==', user.uid)), (snap) => {
+      const progress = {};
+      snap.docs.forEach(d => { const data = d.data(); progress[data.collectionId] = { id: d.id, ...data }; });
+      setUserTrainingProgress(progress);
+    });
+  }, [user]);
+
+  // Carica indovinelli della collezione selezionata
+  useEffect(() => {
+    if (!selectedTraining) { setTrainingRiddles([]); return; }
+    return onSnapshot(query(collection(db, 'trainingRiddles'), where('collectionId', '==', selectedTraining.id), orderBy('ordine', 'asc')), (snap) => {
+      setTrainingRiddles(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [selectedTraining]);
+
   useEffect(() => {
     if (competitions.length > 0 && user && !initialStateRestored && savedState.current) {
       if (savedState.current.selectedCompetitionId) {
@@ -969,6 +1211,20 @@ const App = () => {
       const unsub = onSnapshot(query(collection(db, 'competitionScores'), where('competitionId', '==', compId)), (snap) => {
         const scores = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         setAllCompetitionScores(prev => ({ ...prev, [compId]: scores }));
+      });
+      unsubscribes.push(unsub);
+    });
+    return () => unsubscribes.forEach(u => u());
+  }, [user, userCompetitions]);
+
+  // Carica riddles per ogni gara a cui lutente partecipa (per check gara attiva)
+  useEffect(() => {
+    if (!user || userCompetitions.length === 0) { setAllRiddlesForComps({}); return; }
+    const unsubscribes = [];
+    userCompetitions.forEach(compId => {
+      const unsub = onSnapshot(query(collection(db, 'riddles'), where('competitionId', '==', compId)), (snap) => {
+        const riddlesList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setAllRiddlesForComps(prev => ({ ...prev, [compId]: riddlesList }));
       });
       unsubscribes.push(unsub);
     });
@@ -1109,12 +1365,8 @@ const App = () => {
     try {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       await sendEmailVerification(cred.user);
-      const userData = { fullName: fullName.trim(), username: username.trim(), email, readAnnouncements: [], dismissedNotifications: [], usernameChangedAt: null, createdAt: serverTimestamp() };
+      const userData = { fullName: fullName.trim(), username: username.trim(), email, readAnnouncements: [], dismissedNotifications: [], usernameChangedAt: null, emailVerified: false, webhookSent: false, createdAt: serverTimestamp() };
       await setDoc(doc(db, 'users', cred.user.uid), userData);
-      const webhookUrl = import.meta.env.VITE_PABBLY_WEBHOOK_URL;
-      if (webhookUrl) {
-        try { await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, mode: 'no-cors', body: JSON.stringify({ event: 'new_registration', oderId: cred.user.uid, fullName: fullName.trim(), username: username.trim(), email, timestamp: new Date().toISOString() }) }); } catch (e) { console.error('Webhook error:', e); }
-      }
       showMsg('✅ Registrazione completata! Controlla la tua email.');
     } catch (e) { showMsg(e.code === 'auth/email-already-in-use' ? 'Email già registrata' : 'Errore'); } finally { setAuthLoading(false); }
   };
@@ -1159,7 +1411,75 @@ const App = () => {
     } catch (e) { showMsg('Errore: ' + e.message); return false; } finally { setUpdatingUsername(false); }
   };
 
+
+  // Handler per allenamento
+  const handleTrainingAnswer = async (collectionId, riddle, answer, currentIndex, attemptsToday) => {
+    if (!user) return { correct: false };
+    const isCorrect = answer.trim().toLowerCase() === riddle.risposta.trim().toLowerCase();
+    const progressRef = doc(db, 'userTrainingProgress', `${collectionId}_${user.uid}`);
+    const today = new Date().toDateString();
+    
+    if (isCorrect) {
+      await setDoc(progressRef, {
+        oderId: user.uid,
+        collectionId,
+        currentRiddle: currentIndex + 1,
+        passUsed: userTrainingProgress[collectionId]?.passUsed || 0,
+        attemptsToday: 0,
+        lastAttemptDate: today
+      }, { merge: true });
+      return { correct: true };
+    } else {
+      const newAttempts = attemptsToday + 1;
+      await setDoc(progressRef, {
+        oderId: user.uid,
+        collectionId,
+        currentRiddle: currentIndex,
+        passUsed: userTrainingProgress[collectionId]?.passUsed || 0,
+        attemptsToday: newAttempts,
+        lastAttemptDate: today
+      }, { merge: true });
+      const collection = trainingCollections.find(c => c.id === collectionId);
+      return { correct: false, attemptsRemaining: (collection?.maxAttemptsPerDay || 5) - newAttempts };
+    }
+  };
+
+  const handleTrainingPass = async (collectionId, currentIndex, currentPassUsed) => {
+    if (!user) return;
+    const progressRef = doc(db, 'userTrainingProgress', `${collectionId}_${user.uid}`);
+    await setDoc(progressRef, {
+      oderId: user.uid,
+      collectionId,
+      currentRiddle: currentIndex + 1,
+      passUsed: currentPassUsed + 1,
+      attemptsToday: userTrainingProgress[collectionId]?.attemptsToday || 0,
+      lastAttemptDate: userTrainingProgress[collectionId]?.lastAttemptDate || new Date().toDateString()
+    }, { merge: true });
+  };
+  const isUserInActiveCompetition = () => {
+    if (!userCompetitions || userCompetitions.length === 0) return false;
+    const now = new Date();
+    return competitions.some(c => {
+      if (!userCompetitions.includes(c.id)) return false;
+      const compRiddles = allRiddlesForComps[c.id] || [];
+      if (compRiddles.length > 0) {
+        const dates = compRiddles.map(r => ({
+          start: r.dataInizio?.toDate ? r.dataInizio.toDate() : new Date(r.dataInizio),
+          end: r.dataFine?.toDate ? r.dataFine.toDate() : new Date(r.dataFine)
+        }));
+        const start = new Date(Math.min(...dates.map(d => d.start.getTime())));
+        const end = new Date(Math.max(...dates.map(d => d.end.getTime())));
+        return now >= start && now <= end;
+      }
+      const start = c.dataInizio?.toDate ? c.dataInizio.toDate() : new Date(c.dataInizio);
+      const end = c.dataFine?.toDate ? c.dataFine.toDate() : new Date(c.dataFine);
+      return now >= start && now <= end;
+    });
+  };
+
   const canChangeUsername = () => {
+    // Blocca se in gara attiva
+    if (isUserInActiveCompetition()) return false;
     if (!userData?.usernameChangedAt) return true;
     const lastChange = userData.usernameChangedAt.toDate ? userData.usernameChangedAt.toDate() : new Date(userData.usernameChangedAt);
     return (Date.now() - lastChange.getTime()) / (1000 * 60 * 60 * 24) >= 30;
@@ -1258,6 +1578,23 @@ const App = () => {
     );
   }
 
+
+  // Vista allenamento selezionato
+  if (selectedTraining) {
+    return (
+      <TrainingView 
+        collections={trainingCollections} 
+        selectedCollection={selectedTraining} 
+        riddles={trainingRiddles} 
+        progress={userTrainingProgress} 
+        onSelect={setSelectedTraining} 
+        onBack={() => setSelectedTraining(null)} 
+        onAnswer={handleTrainingAnswer} 
+        onPass={handleTrainingPass} 
+        user={user} 
+      />
+    );
+  }
   if (selectedCompetition) {
     const isJoined = userCompetitions.includes(selectedCompetition.id);
     const isPast = isCompetitionPast(selectedCompetition);
@@ -1354,9 +1691,9 @@ const App = () => {
   }
 
   const unreadAnnouncements = announcements.filter(a => !readAnnouncements.includes(a.id));
-  const activeJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && isCompetitionActive(c) && !c.archived);
-  const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && !c.archived);
-  const pastComps = competitions.filter(c => isCompetitionPast(c) && !userCompetitions.includes(c.id) && !c.archived);
+  const activeJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && isCompetitionActive(c) && !c.archived && c.published !== false);
+  const allJoinedComps = competitions.filter(c => userCompetitions.includes(c.id) && !c.archived && c.published !== false);
+  const pastComps = competitions.filter(c => isCompetitionPast(c) && !userCompetitions.includes(c.id) && !c.archived && c.published !== false);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-100 to-blue-100 pb-24">
@@ -1476,10 +1813,10 @@ const App = () => {
                 )}
                 
                 <h3 className="font-bold text-gray-800">Tutte le gare</h3>
-                {competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived).length === 0 ? (
+                {competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived && c.published !== false).length === 0 ? (
                   <div className="bg-white rounded-2xl p-8 text-center"><p className="text-gray-500">Nessuna nuova gara disponibile</p></div>
                 ) : (
-                  competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived).map(comp => (
+                  competitions.filter(c => !userCompetitions.includes(c.id) && !c.archived && c.published !== false).map(comp => (
                     <CompetitionCard key={comp.id} competition={comp} isJoined={false} onJoin={handleJoinCompetition} onSelect={setSelectedCompetition} userScore={0} competitionRiddles={getRiddlesForCompetition(comp.id)} isPastCompetition={isCompetitionPast(comp)} userCorrectAnswers={0} allScoresForComp={allCompetitionScores[comp.id] || []} />
                   ))
                 )}
@@ -1512,7 +1849,8 @@ const App = () => {
               </div>
             )}
 
-            {activeTab === 'profile' && <ProfileView userData={userData} user={user} onUpdateUsername={handleUpdateUsername} onUpdateFullName={handleUpdateFullName} updating={updatingUsername} canChangeUsername={canChangeUsername()} daysUntilChange={daysUntilUsernameChange()} />}
+            {activeTab === 'training' && !selectedTraining && <TrainingView collections={trainingCollections} selectedCollection={null} riddles={[]} progress={userTrainingProgress} onSelect={setSelectedTraining} onBack={() => setSelectedTraining(null)} onAnswer={handleTrainingAnswer} onPass={handleTrainingPass} user={user} />}
+            {activeTab === 'profile' && <ProfileView userData={userData} user={user} onUpdateUsername={handleUpdateUsername} onUpdateFullName={handleUpdateFullName} updating={updatingUsername} canChangeUsername={canChangeUsername()} daysUntilChange={daysUntilUsernameChange()} isInActiveCompetition={isUserInActiveCompetition()} />}
           </>
         )}
 
